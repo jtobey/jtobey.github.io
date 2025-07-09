@@ -1,18 +1,11 @@
 // tests.js - Start of the test additions
 
 // --- Test Setup & Mocks ---
-const TEST_DEFAULT_TILE_VALUES = {
-    'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1, 'J': 8,
-    'K': 5, 'L': 1, 'M': 3, 'N': 1, 'O': 1, 'P': 3, 'Q': 10, 'R': 1, 'S': 1, 'T': 1,
-    'U': 1, 'V': 4, 'W': 4, 'X': 8, 'Y': 4, 'Z': 10
-};
-const TEST_DEFAULT_LETTER_DISTRIBUTION = {
-    'A': 9, 'B': 2, 'C': 2, 'D': 4, 'E': 12, 'F': 2, 'G': 3, 'H': 2, 'I': 9, 'J': 1,
-    'K': 1, 'L': 4, 'M': 2, 'N': 6, 'O': 8, 'P': 2, 'Q': 1, 'R': 6, 'S': 4, 'T': 6,
-    'U': 4, 'V': 2, 'W': 2, 'X': 1, 'Y': 2, 'Z': 1
-};
-const TEST_DEFAULT_BLANK_COUNT = 2;
-const TEST_DEFAULT_SEVEN_TILE_BONUS = 50;
+// Note: TEST_DEFAULT_TILE_VALUES and TEST_DEFAULT_LETTER_DISTRIBUTION are removed.
+// We will use DEFAULT_TILE_VALUES and DEFAULT_LETTER_DISTRIBUTION from script.js directly.
+// These are the actual default values used by the GameState constructor if not overridden.
+const ACTUAL_DEFAULT_BLANK_COUNT = 2;
+const ACTUAL_DEFAULT_SEVEN_TILE_BONUS = 50;
 
 let assertions = 0;
 let failures = 0;
@@ -131,10 +124,10 @@ function testURLHandlingWithCustomSettings() {
         sevenTileBonus: 75
     };
     const defaultSettingsCopy = JSON.parse(JSON.stringify({ // Deep copy for safety
-        letterDistribution: TEST_DEFAULT_LETTER_DISTRIBUTION,
-        tileValues: TEST_DEFAULT_TILE_VALUES,
-        blankTileCount: TEST_DEFAULT_BLANK_COUNT,
-        sevenTileBonus: TEST_DEFAULT_SEVEN_TILE_BONUS
+        letterDistribution: DEFAULT_LETTER_DISTRIBUTION, // Using global from script.js
+        tileValues: DEFAULT_TILE_VALUES,             // Using global from script.js
+        blankTileCount: ACTUAL_DEFAULT_BLANK_COUNT,
+        sevenTileBonus: ACTUAL_DEFAULT_SEVEN_TILE_BONUS
     }));
 
     const gameWithCustom = new GameState('gid-custom', 1, customSettings);
@@ -215,7 +208,7 @@ function testStartGameWithSettingsModal() {
     assertEqual(mockAlertMessages.length > 0 && mockAlertMessages[0].includes("Error parsing Tile Distribution JSON"), true, "startGameWithSettings: Alert for invalid distribution JSON");
 
     clearMockAlerts(); window.currentGame = null;
-    distInput.value = ""; blankInput.value = "-5";
+    distInput.value = ""; blankInput.value = "-5";  valInput.value = ""; bonusInput.value = ""; // Ensure other fields are clear for this test
     startGameWithSettings();
     assertEqual(window.currentGame, null, "startGameWithSettings: Game not started with invalid blank count");
     assertEqual(mockAlertMessages.length > 0 && mockAlertMessages[0].includes("Invalid Blank Tile Count"), true, "startGameWithSettings: Alert for invalid blank count");
@@ -223,10 +216,10 @@ function testStartGameWithSettingsModal() {
     clearMockAlerts(); window.currentGame = null;
     distInput.value = ""; valInput.value = ""; blankInput.value = ""; bonusInput.value = "";
     startGameWithSettings();
-    assertDeepEqual(currentGame.settings.letterDistribution, TEST_DEFAULT_LETTER_DISTRIBUTION, "startGameWithSettings: Default distribution for empty input");
-    assertDeepEqual(currentGame.settings.tileValues, TEST_DEFAULT_TILE_VALUES, "startGameWithSettings: Default values for empty input");
-    assertEqual(currentGame.settings.blankTileCount, TEST_DEFAULT_BLANK_COUNT, "startGameWithSettings: Default blank count for empty input");
-    assertEqual(currentGame.settings.sevenTileBonus, TEST_DEFAULT_SEVEN_TILE_BONUS, "startGameWithSettings: Default bonus for empty input");
+    assertDeepEqual(currentGame.settings.letterDistribution, DEFAULT_LETTER_DISTRIBUTION, "startGameWithSettings: Default distribution for empty input"); // Uses script.js DEFAULT
+    assertDeepEqual(currentGame.settings.tileValues, DEFAULT_TILE_VALUES, "startGameWithSettings: Default values for empty input"); // Uses script.js DEFAULT
+    assertEqual(currentGame.settings.blankTileCount, ACTUAL_DEFAULT_BLANK_COUNT, "startGameWithSettings: Default blank count for empty input");
+    assertEqual(currentGame.settings.sevenTileBonus, ACTUAL_DEFAULT_SEVEN_TILE_BONUS, "startGameWithSettings: Default bonus for empty input");
     assertEqual(mockAlertMessages.length, 0, "startGameWithSettings: No alerts for empty inputs (defaults)");
 
     document.body.removeChild(modalContainer);
@@ -278,6 +271,86 @@ function testLocalStorageWithCustomSettings() {
     window.localPlayerId = originalLocalPlayerId;
 }
 
+// --- Test for Center Square Rule on Empty Board (Post-Initial Turns) ---
+function testCenterSquareRuleOnEmptyBoard() {
+    console.log("\n--- Running Center Square Rule on Empty Board Test ---");
+    clearMockAlerts();
+
+    // 1. Setup game
+    // Use default settings for simplicity, not testing custom settings here.
+    let game = new GameState('test-center-empty', 555, {});
+    game.turnNumber = 2; // Simulate a few turns have passed
+
+    // Ensure board is empty (it should be by default after GameState init)
+    let boardIsEmpty = true;
+    for (let r = 0; r < game.board.size; r++) {
+        for (let c = 0; c < game.board.size; c++) {
+            if (game.board.grid[r][c].tile) {
+                boardIsEmpty = false;
+                break;
+            }
+        }
+        if (!boardIsEmpty) break;
+    }
+    assertEqual(boardIsEmpty, true, "Test Setup: Board is initially empty for the test scenario.");
+
+    const centerRow = Math.floor(game.board.size / 2);
+    const centerCol = Math.floor(game.board.size / 2);
+
+    // 2. Attempt to place a word NOT covering the center square
+    let movesOffCenter = [
+        { tileRef: new Tile('A', 1), to: { row: 0, col: 0 } },
+        { tileRef: new Tile('B', 3), to: { row: 0, col: 1 } }
+    ];
+    // Ensure these moves are not on center if center is not 0,0
+    if (centerRow === 0 && centerCol === 0) {
+        // Adjust if center happens to be 0,0 (e.g. very small board, though default is 15x15)
+        movesOffCenter = [
+            { tileRef: new Tile('A', 1), to: { row: 1, col: 0 } },
+            { tileRef: new Tile('B', 3), to: { row: 1, col: 1 } }
+        ];
+    }
+
+    let validationResultOffCenter = validatePlacement(movesOffCenter, game.turnNumber, game.board);
+    assertEqual(validationResultOffCenter.isValid, false, "Center Rule (Empty Board > T0): Placing off-center is invalid.");
+    assertEqual(validationResultOffCenter.message, "Invalid placement: The first word on an empty board must cover the center square.", "Center Rule (Empty Board > T0): Correct message for off-center placement.");
+
+    // 3. Attempt to place a word covering the center square
+    let movesOnCenter = [
+        { tileRef: new Tile('C', 3), to: { row: centerRow, col: centerCol } },
+        { tileRef: new Tile('A', 1), to: { row: centerRow, col: centerCol + 1 } }
+    ];
+    // If centerCol + 1 is out of bounds, adjust (though unlikely for default board size)
+    if (centerCol + 1 >= game.board.size) {
+         movesOnCenter = [
+            { tileRef: new Tile('C', 3), to: { row: centerRow, col: centerCol -1 } },
+            { tileRef: new Tile('A', 1), to: { row: centerRow, col: centerCol } }
+        ];
+    }
+
+    let validationResultOnCenter = validatePlacement(movesOnCenter, game.turnNumber, game.board);
+    assertEqual(validationResultOnCenter.isValid, true, "Center Rule (Empty Board > T0): Placing on-center is valid.");
+    assertEqual(validationResultOnCenter.message, "", "Center Rule (Empty Board > T0): No error message for on-center placement.");
+
+
+    // 4. Test scenario: Board has tiles, turn > 0 (standard connection rule applies)
+    game.turnNumber = 3;
+    // Place a tile on the board (not center) to simulate existing tiles
+    const existingTile = new Tile('X', 8);
+    game.board.grid[0][0].tile = existingTile;
+
+    let movesNotConnecting = [
+        { tileRef: new Tile('Y', 4), to: { row: 5, col: 5 } },
+        { tileRef: new Tile('Z', 10), to: { row: 5, col: 6 } }
+    ];
+    let validationResultNotConnecting = validatePlacement(movesNotConnecting, game.turnNumber, game.board);
+    assertEqual(validationResultNotConnecting.isValid, false, "Connection Rule: Placing unconnected on non-empty board is invalid.");
+    assertEqual(validationResultNotConnecting.message, "Invalid placement: New words must connect to existing tiles.", "Connection Rule: Correct message for unconnected placement.");
+
+    // Clean up the tile for subsequent tests if any
+    game.board.grid[0][0].tile = null;
+}
+
 function runAllTests() {
     // Test suite setup
     const originalGame = window.currentGame;
@@ -290,6 +363,7 @@ function runAllTests() {
     testURLHandlingWithCustomSettings();
     testStartGameWithSettingsModal();
     testLocalStorageWithCustomSettings();
+    testCenterSquareRuleOnEmptyBoard();
 
     printTestSummary();
 

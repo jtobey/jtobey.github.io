@@ -168,15 +168,23 @@ function GameState(gameId, randomSeed, settings = {}) {
         this.bag = [];
         const distribution = this.settings.letterDistribution;
         const values = this.settings.tileValues;
+
+        // Ensure values is treated as an object, even if not provided in settings
+        const effectiveValues = (typeof values === 'object' && values !== null) ? values : DEFAULT_TILE_VALUES;
+
         for (const letter in distribution) {
             if (distribution.hasOwnProperty(letter)) {
                 for (let i = 0; i < distribution[letter]; i++) {
-                    this.bag.push(new Tile(letter, values[letter] || 0));
+                    // Use the effectiveValues; default to 0 if letter not in values
+                    this.bag.push(new Tile(letter, effectiveValues[letter] !== undefined ? effectiveValues[letter] : 0));
                 }
             }
         }
+
+        // For blank tiles, check if a custom value for blanks ('_') is defined in tileValues
+        const blankValue = (effectiveValues['_'] !== undefined) ? effectiveValues['_'] : 0;
         for (let i = 0; i < this.settings.blankTileCount; i++) {
-            this.bag.push(new Tile('', 0, true));
+            this.bag.push(new Tile('', blankValue, true));
         }
     };
     this._shuffleBag = function() {
@@ -204,7 +212,9 @@ function GameState(gameId, randomSeed, settings = {}) {
         }
         return drawnTiles;
     };
-    this.players = [new Player("player1", "Player 1"), new Player("player2", "Player 2")];
+    const p1InitialName = (settings.playerNames && settings.playerNames.player1) ? settings.playerNames.player1 : "Player 1";
+    const p2InitialName = (settings.playerNames && settings.playerNames.player2) ? settings.playerNames.player2 : "Player 2";
+    this.players = [new Player("player1", p1InitialName), new Player("player2", p2InitialName)];
     this.currentPlayerIndex = 0;
     this.bag = [];
     this._initializeBag(); this._shuffleBag();
@@ -372,15 +382,24 @@ function updateGameStatus(gameState) {
     if (headerP2Score) headerP2Score.textContent = player2.score;
 
     // Update turn player and tiles in bag (these elements remain in the info panel)
-    document.getElementById('turn-player').textContent = gameState.getCurrentPlayer().name;
-    document.getElementById('tiles-in-bag').textContent = gameState.bag.length;
+    const turnPlayerEl = document.getElementById('turn-player');
+    if (turnPlayerEl) turnPlayerEl.textContent = gameState.getCurrentPlayer().name;
+    const tilesInBagEl = document.getElementById('tiles-in-bag');
+    if (tilesInBagEl) tilesInBagEl.textContent = gameState.bag.length;
 }
 
 function fullRender(gameState, localPlayerId) {
+    const boardContainer = document.getElementById('board-container');
     if (!gameState) {
-        document.getElementById('board-container').innerHTML = '<p>No game active. Start a new game or load one via URL.</p>';
+        if (boardContainer) {
+            boardContainer.innerHTML = '<p>No game active. Start a new game or load one via URL.</p>';
+        } else {
+            console.warn("fullRender: board-container not found, cannot display no-game message.");
+        }
         return;
     }
+    // renderBoard, renderRacks, and updateGameStatus already have their own internal checks
+    // for the existence of their primary DOM elements.
     renderBoard(gameState); renderRacks(gameState, localPlayerId); updateGameStatus(gameState);
 }
 
@@ -898,16 +917,42 @@ function validatePlacement(moves, turnNumber, boardState) {
         }
     } else {
         let connects = false, boardHasTiles = false;
-        for(let r_idx=0;r_idx<boardState.size;r_idx++) for(let c_idx=0;c_idx<boardState.size;c_idx++) if(boardState.grid[r_idx][c_idx].tile && !sortedMoves.some(m=>m.to.row===r_idx&&m.to.col===c_idx)) {boardHasTiles=true;break;}
+        // Check if the board has any tiles already placed (excluding the current moves)
+        for(let r_idx=0; r_idx<boardState.size; r_idx++) {
+            for(let c_idx=0; c_idx<boardState.size; c_idx++) {
+                if(boardState.grid[r_idx][c_idx].tile && !sortedMoves.some(m=>m.to.row===r_idx && m.to.col===c_idx)) {
+                    boardHasTiles=true;
+                    break;
+                }
+            }
+            if (boardHasTiles) break;
+        }
+
         if(boardHasTiles){
+            // Board has tiles, so new moves must connect to them
             for(const move of sortedMoves){
                 const {row,col} = move.to;
+                // Check adjacent squares for existing tiles not part of the current move
                 [[row-1,col],[row+1,col],[row,col-1],[row,col+1]].forEach(([nr,nc])=>{
-                    if(nr>=0&&nr<boardState.size&&nc>=0&&nc<boardState.size && boardState.grid[nr][nc].tile && !sortedMoves.some(sm=>sm.to.row===nr&&sm.to.col===nc)) connects=true;
+                    if(nr>=0 && nr<boardState.size && nc>=0 && nc<boardState.size &&
+                       boardState.grid[nr][nc].tile &&
+                       !sortedMoves.some(sm=>sm.to.row===nr && sm.to.col===nc)) {
+                        connects=true;
+                    }
                 });
-                if(connects)break;
+                if(connects) break;
             }
-            if(!connects){validationResult.message="Invalid placement: New words must connect to existing tiles."; return validationResult;}
+            if(!connects){
+                validationResult.message="Invalid placement: New words must connect to existing tiles.";
+                return validationResult;
+            }
+        } else {
+            // Board is empty (even if turnNumber > 0), so enforce center square rule
+            const center = boardState.getCenterSquare();
+            if (!sortedMoves.some(m => m.to.row === center.row && m.to.col === center.col)) {
+                validationResult.message = "Invalid placement: The first word on an empty board must cover the center square.";
+                return validationResult;
+            }
         }
     }
     validationResult.isValid = true; return validationResult;
@@ -1720,17 +1765,32 @@ function generateTurnURL(gameId, turnNumber, turnData, seed = null, settings = n
             const cblString = effectiveSettings.customBoardLayout.join(',');
             params.append('cbl', cblString);
         }
+
+        // Add player names if custom and P1, Turn 1
+        if (effectiveSettings.playerNames) {
+            if (effectiveSettings.playerNames.player1 && effectiveSettings.playerNames.player1 !== "Player 1") {
+                params.append('p1n', effectiveSettings.playerNames.player1);
+            }
+            if (effectiveSettings.playerNames.player2 && effectiveSettings.playerNames.player2 !== "Player 2") {
+                params.append('p2n', effectiveSettings.playerNames.player2);
+            }
+        }
     }
 
     if (exchangeData !== null) { // Check if exchangeData is provided (not null)
         params.append('ex', exchangeData); // exchangeData is either "" for pass or "0,1,2" for exchange
     } else if (turnData && turnData.word) {
         params.append('wl', `${turnData.start_row}.${turnData.start_col}`);
-        params.append('wd', turnData.direction);
+        // params.append('wd', turnData.direction); // Removed as per requirement
         if (turnData.blanks_info && turnData.blanks_info.length > 0) {
             params.append('bt', turnData.blanks_info.map(bi => `${bi.idx}:${bi.al}`).join(';'));
         }
-        params.append('w', turnData.word);
+        // params.append('w', turnData.word); // Removed as per requirement
+        if (turnData.direction === 'horizontal') {
+            params.append('wh', turnData.word);
+        } else if (turnData.direction === 'vertical') {
+            params.append('wv', turnData.word);
+        }
     }
     // Note: A turn can be a play, a pass, or an exchange, but not more than one.
     // So, if 'ex' is present, 'w', 'wl', 'wd', 'bt' should not be.
@@ -1888,6 +1948,15 @@ function startGameWithSettings() {
 
     const gameId = `game-${Date.now()}`;
     const randomSeed = Math.floor(Math.random() * 1000000);
+
+    // Get player names from input fields
+    const player1NameInput = document.getElementById('player1-name-input').value.trim();
+    const player2NameInput = document.getElementById('player2-name-input').value.trim();
+
+    const p1Name = player1NameInput || "Player 1";
+    const p2Name = player2NameInput || "Player 2";
+
+    gameSettings.playerNames = { player1: p1Name, player2: p2Name };
 
     // gameSettings object is now populated with custom values if provided and valid
     currentGame = new GameState(gameId, randomSeed, gameSettings);
@@ -2071,10 +2140,22 @@ function applyTurnDataFromURL(gameState, params) {
         }
     }
 
-    const wordStrFromURL = params.get('w');
-    const wordLocation = params.get('wl');
-    const wordDirection = params.get('wd');
-    const blankTileData = params.get('bt');
+    let wordStrFromURL = null;
+    let wordDirection = null;
+    const wordLocation = params.get('wl'); // This remains the same
+    const blankTileData = params.get('bt'); // This remains the same
+
+    const whParam = params.get('wh');
+    const wvParam = params.get('wv');
+
+    if (whParam !== null) {
+        wordStrFromURL = whParam;
+        wordDirection = 'horizontal';
+    } else if (wvParam !== null) {
+        wordStrFromURL = wvParam;
+        wordDirection = 'vertical';
+    }
+    // If neither wh nor wv is found, wordStrFromURL and wordDirection will remain null.
 
     if (wordStrFromURL && wordLocation && wordDirection) {
         console.log(`Applying word-based turn data: ${wordStrFromURL} at ${wordLocation} ${wordDirection} for player ${playerWhoseTurnItWas.name}`);
@@ -2312,6 +2393,18 @@ function loadGameFromURLOrStorage(searchStringOverride = null) {
                         // leading to default layout.
                     }
                 }
+
+        const urlP1Name = params.get('p1n');
+        const urlP2Name = params.get('p2n');
+        if (urlP1Name || urlP2Name) {
+            newGameSettings.playerNames = {};
+            if (urlP1Name) {
+                newGameSettings.playerNames.player1 = urlP1Name;
+            }
+            if (urlP2Name) {
+                newGameSettings.playerNames.player2 = urlP2Name;
+            }
+        }
 
                 currentGame = new GameState(urlGameId, parseInt(urlSeed), newGameSettings);
                 localPlayerId = 'player2'; // This client is Player 2
