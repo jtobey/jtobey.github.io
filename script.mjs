@@ -248,7 +248,7 @@ function renderRack(gameState, localPlayerId) {
     localPlayer.rack.forEach(tile => {
         // Tiles in local player's rack are draggable only if it's their turn and not in exchange mode.
         // Exchange mode handles its own click-to-select logic, not drag-and-drop.
-        const isDraggable = (gameState.getCurrentPlayer().id === localPlayerId && !isExchangeModeActive);
+        const isDraggable = !isExchangeModeActive;
         localRackElement.appendChild(renderTileInRack(tile, isDraggable));
     });
     // Opponent's rack is not explicitly rendered here, but could be (e.g., showing tile counts).
@@ -331,7 +331,17 @@ function showPostMoveModal(pointsEarned, turnURL) {
     }
     modalPointsEarnedSpan.textContent = pointsEarned;
     postMoveModalElement.dataset.turnUrl = turnURL; // Store URL for the copy button/action
-    if (modalCopyCheckbox) modalCopyCheckbox.checked = true; // Default to copying URL
+
+    if (modalCopyCheckbox) {
+        if (navigator.clipboard) {
+            modalCopyCheckbox.checked = true; // Default to copying URL
+            // show parent
+            modalCopyCheckbox.parentElement.style.display = 'block';
+        } else {
+            // hide parent
+            modalCopyCheckbox.parentElement.style.display = 'none';
+        }
+    }
     postMoveModalElement.removeAttribute('hidden'); // Make the modal visible
 }
 
@@ -385,20 +395,6 @@ function handleTouchStart(event) {
     if (!tileElement) return; // Not a tile or descendant of a tile element
 
     const tileId = tileElement.dataset.tileId;
-    const localPlayerInstance = currentGame.players.find(p => p.id === localPlayerId);
-
-    if (!localPlayerInstance) {
-        console.log("Touch drag prevented: Local player instance not found.");
-        return;
-    }
-    // Check if the tile is in the local player's rack OR part of their current uncommitted moves on the board.
-    const isTileInLocalPlayerRack = localPlayerInstance.rack.some(t => t.id === tileId);
-    const isTileInCurrentTurnMoves = currentGame.currentTurnMoves.some(m => m.tileId === tileId);
-
-    if (!isTileInLocalPlayerRack && !isTileInCurrentTurnMoves) {
-        console.log("Touch drag prevented: Tile is not in local player's rack or current turn moves.", tileId);
-        return;
-    }
 
     // Tile is draggable by the local player.
     console.log(`Touch Start: Allowed for local player, tile ${tileId}`);
@@ -625,21 +621,6 @@ function handleDragStart(event) {
     }
 
     const tileId = tileElement.dataset.tileId;
-    const localPlayerInstance = currentGame.players.find(p => p.id === localPlayerId);
-
-    if (!localPlayerInstance) {
-        console.log("Mouse Drag prevented: Local player instance not found.");
-        event.preventDefault(); return;
-    }
-
-    // Check if the tile is in the local player's rack OR part of their current uncommitted moves on the board.
-    const isTileInLocalPlayerRack = localPlayerInstance.rack.some(t => t.id === tileId);
-    const isTileInCurrentTurnMoves = currentGame.currentTurnMoves.some(m => m.tileId === tileId);
-
-    if (!isTileInLocalPlayerRack && !isTileInCurrentTurnMoves) {
-        console.log("Mouse Drag prevented: Tile is not in local player's rack or current turn moves.", tileId);
-        event.preventDefault(); return;
-    }
 
     // Tile is draggable by the local player.
     console.log(`Mouse Drag Start: Allowed for local player, tile ${tileId}`);
@@ -1242,8 +1223,9 @@ function toggleCustomSettingsSection() {
     if (settingsSection.style.display === 'none' || settingsSection.style.display === '') {
         settingsSection.style.display = 'block'; // Show the section
         // Reset dictionary options to default when opening
-        const defaultDictRadio = document.querySelector('input[name="dictionaryType"][value="permissive"]');
-        if (defaultDictRadio) defaultDictRadio.checked = true;
+        const dictionaryTypeSelect = document.getElementById('dictionary-type-select');
+        if (dictionaryTypeSelect) dictionaryTypeSelect.value = 'permissive';
+
 
         const customUrlInput = document.getElementById('custom-dictionary-url');
         if (customUrlInput) {
@@ -1266,7 +1248,7 @@ function toggleCustomSettingsSection() {
  */
 function startGameWithSettings() {
     // Collect dictionary settings
-    const selectedDictionaryType = document.querySelector('input[name="dictionaryType"]:checked').value;
+    const selectedDictionaryType = document.getElementById('dictionary-type-select').value;
     let customDictionaryUrl = null;
     if (selectedDictionaryType === 'custom') {
         customDictionaryUrl = document.getElementById('custom-dictionary-url').value.trim();
@@ -1455,6 +1437,12 @@ function loadGameFromURLOrStorage(searchSource, storage) {
 function initializeGameAndEventListeners() {
     console.log("DOM fully loaded and parsed. Initializing game and event listeners.");
 
+    // Hide copy URL button if clipboard API is not available
+    if (!navigator.clipboard) {
+        const copyUrlBtn = document.getElementById('copy-url-btn');
+        if (copyUrlBtn) copyUrlBtn.style.display = 'none';
+    }
+
     // Modal elements (cache them for reuse)
     const postMoveModalElement = document.getElementById('post-move-modal');
     const modalCloseBtn = document.getElementById('modal-close-btn');
@@ -1479,13 +1467,14 @@ function initializeGameAndEventListeners() {
     const startGameBtn = document.getElementById('start-game-btn');
     if (startGameBtn) startGameBtn.addEventListener('click', startGameWithSettings);
 
-    // Dictionary type radio buttons: show/hide custom URL input
-    document.querySelectorAll('input[name="dictionaryType"]').forEach(radio => {
-        radio.addEventListener('change', function() {
+    // Dictionary type dropdown: show/hide custom URL input
+    const dictionaryTypeSelect = document.getElementById('dictionary-type-select');
+    if (dictionaryTypeSelect) {
+        dictionaryTypeSelect.addEventListener('change', function() {
             document.getElementById('custom-dictionary-url').style.display =
                 (this.value === 'custom') ? 'block' : 'none';
         });
-    });
+    }
 
     // "Copy URL" button for the main turn URL input field
     const copyUrlBtn = document.getElementById('copy-url-btn');
@@ -1525,7 +1514,7 @@ function initializeGameAndEventListeners() {
             // If checkbox is checked, attempt to copy URL from modal's dataset before closing
             if (modalCopyCheckbox && modalCopyCheckbox.checked) {
                 const urlToCopyFromModal = postMoveModalElement.dataset.turnUrl;
-                if (urlToCopyFromModal) {
+                if (urlToCopyFromModal && navigator.clipboard) {
                     navigator.clipboard.writeText(urlToCopyFromModal)
                         .then(() => console.log('Turn URL copied to clipboard from modal.'))
                         .catch(err => {
