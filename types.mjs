@@ -178,10 +178,10 @@ function Player(id, name) {
 /**
  * Represents the overall state of the game.
  * @param {string} gameId - A unique identifier for this game session.
- * @param {number} randomSeed - The seed used for the PRNG for this game.
+ * @param {?number} randomSeed - The seed used for the PRNG for this game.
  * @param {object} [settings={}] - Custom game settings to override defaults. See example structure above.
  * @property {object} settings - Effective game settings, merging defaults with custom inputs.
- * @property {function(): number} prng - The pseudorandom number generator instance for this game.
+ * @property {Mulberry32} prng - The pseudorandom number generator instance for this game.
  * @property {Array<Tile>} bag - An array of Tile objects available to be drawn.
  * @property {Array<Player>} players - An array of Player objects.
  * @property {number} currentPlayerIndex - Index of the current player in the `players` array.
@@ -191,9 +191,8 @@ function Player(id, name) {
  *                                              Each object: { tileId: string, tileRef: Tile, from: string ('rack'|'board'), to: {row: number, col: number} }
  * @property {boolean} isGameOver - Flag indicating if the game has ended.
  */
-function GameState(gameId, randomSeed, settings = {}) {
+function GameState(gameId, settings = {}) {
     this.gameId = gameId;
-    this.randomSeed = randomSeed;
 
     // Consolidate settings, applying defaults for any not provided
     this.settings = {
@@ -210,7 +209,7 @@ function GameState(gameId, randomSeed, settings = {}) {
         ...settings // Spread any other custom settings passed in
     };
 
-    this.prng = Mulberry32(this.randomSeed);
+    this.prng = new Mulberry32(this.settings.randomSeed || 0);
     this.bag = []; // Initialize empty bag, to be filled by _initializeBag
 
     /**
@@ -243,10 +242,12 @@ function GameState(gameId, randomSeed, settings = {}) {
      * @private
      */
     this._shuffleBag = function() {
+        console.log(`Shuffling ${this.bag.length} tiles with seed ${this.prng.seed}`);
         for (let i = this.bag.length - 1; i > 0; i--) {
-            const j = Math.floor(this.prng() * (i + 1));
+            const j = Math.floor(this.prng.random() * (i + 1));
             [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]]; // Fisher-Yates shuffle
         }
+        console.log(`Shuffled ${this.bag.length} tiles, seed now ${this.prng.seed}`);
     };
 
     /**
@@ -256,6 +257,7 @@ function GameState(gameId, randomSeed, settings = {}) {
      * @returns {Array<Tile>} The array of tiles drawn.
      */
     this.drawTiles = function(player, numTiles) {
+        console.log(`drawing ${numTiles} of ${this.bag.length} tiles for ${player.name}, seed is ${this.prng.seed}`);
         const drawnTiles = [];
         for (let i = 0; i < numTiles && this.bag.length > 0; i++) {
             const tile = this.bag.pop(); // Take tile from the end of the (shuffled) bag
@@ -273,10 +275,14 @@ function GameState(gameId, randomSeed, settings = {}) {
     this.players = [new Player("player1", p1Name), new Player("player2", p2Name)];
     this.currentPlayerIndex = 0; // Player 1 starts
 
-    // Initialize and shuffle bag, then deal initial tiles to players
-    this._initializeBag();
-    this._shuffleBag();
-    this.players.forEach(player => { this.drawTiles(player, this.settings.rackSize); });
+    if (this.prng.seed) {
+        // Initialize and shuffle bag, then deal initial tiles to players
+        this._initializeBag();
+        this._shuffleBag();
+        this.players.forEach(player => { this.drawTiles(player, this.settings.rackSize); });
+    } else {
+        // The caller should initialize the prng, bag, and racks.
+    }
 
     // Initialize board
     this.board = new Board(this.settings.boardSize, this.settings.customBoardLayout);
@@ -300,8 +306,9 @@ function GameState(gameId, randomSeed, settings = {}) {
  *                               between 0 (inclusive) and 1 (exclusive).
  */
 function Mulberry32(seed) {
-    return function() {
-      let t = seed += 0x6D2B79F5;
+    this.seed = seed;
+    this.random = function() {
+      let t = this.seed += 0x6D2B79F5;
       t = Math.imul(t ^ t >>> 15, t | 1);
       t ^= t + Math.imul(t ^ t >>> 7, t | 61);
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
