@@ -1,0 +1,328 @@
+/* style.css */
+#game-container {
+  display: flex;
+  flex-direction: column;
+}
+
+#board-container {
+  display: grid;
+  grid-template-columns: repeat(15, 40px);
+  grid-template-rows: repeat(15, 40px);
+  background-color: #ccc;
+  border: 1px solid #ccc;
+  width: 601px;
+  height: 601px;
+}
+
+.square {
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  background-color: #dda;
+  border-bottom: 1px solid #ccc;
+  border-right: 1px solid #ccc;
+  justify-content: center;
+  align-items:  center;
+  width: 40px;
+  height: 40px;
+  font-size: 24px;
+}
+
+.bonus-text {
+  color: #dda;
+  font-family: sans-serif;
+  font-size: 18px;
+}
+
+#controls-container {
+  margin-top: 20px;
+}
+
+#rack-container, #exchange-container {
+  display: flex;
+  flex-direction: row;
+  margin-bottom: 10px;
+}
+
+.tile, .tile-spot {
+  box-sizing: border-box;
+  cursor: pointer;
+  position: relative;
+  touch-action: none;
+  background-color: #eee;
+  border: 1px solid #999;
+  width: 40px;
+  height: 40px;
+  margin-right: 5px;
+  font-size: 24px;
+}
+
+.letter {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.value {
+  position: absolute;
+  font-size: 12px;
+  bottom: 2px;
+  left: 4px;
+}
+
+.tile-spot {
+  cursor: default;
+  background-color: #dda;
+  border-color: #ccc;
+}
+
+.tile-spot[data-row="exchange"] {
+  display: flex;
+  justify-content: center;
+  align-items:  center;
+}
+
+.tile-spot[data-row="exchange"]:before {
+  content: "♻";
+  color: #bbb;
+  font-size: 28px;
+}
+
+.placed {
+  background-color: #lightgreen;
+  touch-action: none;
+}
+
+.square.dl {
+  background-color: #c99;
+}
+
+.square.tl {
+  background-color: #bbb;
+}
+
+.square.dw {
+  background-color: #ff3;
+}
+
+.square.tw {
+  background-color: #f90;
+}
+
+.square.center {
+  background-color: #6f9;
+}
+
+.tile.selected, .placed.selected {
+  border: 2px solid #00f !important;
+}
+
+.square.selected {
+  background-color: #f0f0c0 !important;
+}
+
+.drop-target {
+  box-shadow: inset 0 0 5px 2px #0000ff80;
+}
+
+.tile:focus, .square:focus, .placed:focus {
+  outline: 3px solid #333;
+}
+
+#center-panel {
+  display: flex;
+  flex-direction: column;
+  align-items:  center;
+}
+
+#score-panel, #bag-tile-count-container {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.player-score {
+  margin: 0 10px;
+}
+
+.current-player {
+  font-weight: bold;
+}
+
+.ghost-tile {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  transition: transform .1s ease-out;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 4px 8px #0003;
+}
+
+.tile.dragging, .placed.dragging {
+  opacity: .4;
+}
+
+@media (min-width: 1024px) {
+  #game-container {
+    flex-direction: row;
+    align-items:  flex-start;
+  }
+
+  #controls-container {
+    margin-top: 0;
+    margin-left: 20px;
+  }
+}
+
+@media (max-width: 601px) {
+  #board-container {
+    grid-template-columns: repeat(15, 1fr);
+    grid-template-rows: repeat(15, 1fr);
+    width: 98vw;
+    height: 98vw;
+  }
+
+  .square {
+    width: auto;
+    height: auto;
+    font-size: 3.2vw;
+  }
+
+  .value {
+    font-size: 1.6vw;
+  }
+
+  .bonus-text {
+    font-size: 2.4vw;
+  }
+}
+
+dialog {
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  box-shadow: 0 2px 10px #0000001a;
+}
+
+#settings-dialog {
+  background-color: #f9f9f9;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  margin-top: 1em;
+  padding: 1em;
+}
+
+.settings-group {
+  margin-bottom: 1em;
+}
+
+.player-entry {
+  display: flex;
+  align-items:  center;
+  margin-bottom: .5em;
+}
+
+.player-entry input {
+  margin-right: .5em;
+}
+
+@media (prefers-color-scheme: dark) {
+  #settings-dialog {
+    color: #eee;
+    background-color: #333;
+  }
+}
+
+dialog::backdrop {
+  background-color: #00000080;
+}
+
+dialog .buttons {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1em;
+}
+
+dialog button {
+  margin-left: .5em;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #eee;
+    background-color: #121212;
+  }
+
+  h1 {
+    color: #eee;
+  }
+
+  #board-container {
+    background-color: #111;
+    border-color: #444;
+  }
+
+  .square {
+    background-color: #332;
+    border-bottom: 1px solid #444;
+    border-right: 1px solid #444;
+  }
+
+  .tile, .tile-spot {
+    background-color: #444;
+    border: 1px solid #777;
+  }
+
+  .tile-spot {
+    background-color: #332;
+    border-color: #444;
+  }
+
+  .tile-spot[data-row="exchange"]:before {
+    color: #444;
+  }
+
+  .placed {
+    background-color: #282;
+  }
+
+  .square.dl {
+    background-color: #533;
+  }
+
+  .square.tl {
+    background-color: #555;
+  }
+
+  .square.dw {
+    background-color: #660;
+  }
+
+  .square.tw {
+    background-color: #840;
+  }
+
+  .square.center {
+    background-color: #253;
+  }
+
+  .tile.selected, .placed.selected {
+    border: 2px solid #add8e6 !important;
+  }
+
+  .square.selected {
+    background-color: #404010 !important;
+  }
+
+  .bonus-text {
+    color: #332;
+  }
+
+  dialog {
+    color: #eee;
+    background-color: #222;
+    border-color: #555;
+  }
+}
