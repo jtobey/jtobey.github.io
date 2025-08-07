@@ -1,4 +1,4 @@
-// validation.ts
+// game/validation.ts
 function indicesOk(arrayLength, ...indices) {
   for (const index of indices) {
     if (index !== Math.floor(index) || index < 0 || index >= arrayLength)
@@ -28,7 +28,7 @@ function objectsEqual(o1, o2) {
   return keys.every((key) => o1[key] === o2[key]);
 }
 
-// player.ts
+// game/player.ts
 class Player {
   id;
   name;
@@ -53,10 +53,10 @@ class Player {
   }
 }
 
-// version.ts
+// game/version.ts
 var PROTOCOL_VERSION = "0";
 
-// settings.ts
+// game/settings.ts
 function toGameId(gameIdStr) {
   return gameIdStr;
 }
@@ -208,7 +208,7 @@ function checkLetterToNumberMap(name, json) {
   return json;
 }
 
-// tiles_state.ts
+// game/tiles_state.ts
 function checkIndicesForExchange(length, ...indices) {
   if ([...new Set(indices)].length !== indices.length) {
     throw new Error(`exchangeTileIndices contains duplicates: ${indices}`);
@@ -217,7 +217,7 @@ function checkIndicesForExchange(length, ...indices) {
   return [...indices];
 }
 
-// turn.ts
+// game/turn.ts
 function toTurnNumber(n) {
   return n;
 }
@@ -248,7 +248,7 @@ class Turn {
   }
 }
 
-// tile.ts
+// game/tile.ts
 var MIN_TILE_VALUE = 0;
 var MAX_TILE_VALUE = 999999;
 
@@ -303,14 +303,14 @@ function makeTiles({ letterCounts, letterValues }) {
   return tiles;
 }
 
-// serializable.ts
+// game/serializable.ts
 function toJSON(s) {
   if (s && typeof s === "object" && "toJSON" in s)
     return s.toJSON();
   return s;
 }
 
-// bag.ts
+// game/bag.ts
 class Bag {
   randomGenerator;
   tiles;
@@ -353,7 +353,7 @@ class Bag {
   }
 }
 
-// mulberry32_prng.ts
+// game/mulberry32_prng.ts
 class Mulberry32Prng {
   seed;
   constructor(seed) {
@@ -377,7 +377,7 @@ class Mulberry32Prng {
   }
 }
 
-// honor_system_bag.ts
+// game/honor_system_bag.ts
 class HonorSystemBag extends Bag {
   constructor(randomSeed, tiles, shuffle = true, randomGenerator = new Mulberry32Prng(BigInt(randomSeed))) {
     super(tiles, randomGenerator, shuffle);
@@ -396,7 +396,7 @@ class HonorSystemBag extends Bag {
   }
 }
 
-// events.ts
+// game/events.ts
 class BagEvent extends CustomEvent {
 }
 
@@ -409,7 +409,7 @@ class GameEvent extends CustomEvent {
 class BoardEvent extends CustomEvent {
 }
 
-// honor_system_tiles_state.ts
+// game/honor_system_tiles_state.ts
 class HonorSystemTilesState extends EventTarget {
   rackCapacity;
   numberOfTurnsPlayed;
@@ -545,7 +545,7 @@ class HonorSystemTilesState extends EventTarget {
   }
 }
 
-// board.ts
+// game/board.ts
 class Square {
   row;
   col;
@@ -828,7 +828,7 @@ class Board extends EventTarget {
   }
 }
 
-// dictionary.ts
+// game/dictionary.ts
 var DICTIONARY_TYPES = ["permissive", "freeapi", "custom"];
 
 class PlayRejectedError extends Error {
@@ -923,7 +923,7 @@ async function checkWord(wordToCheck, dictionaryType, dictionarySettings) {
   }
 }
 
-// shared_state.ts
+// game/shared_state.ts
 class SharedState {
   settings;
   gameId;
@@ -1059,7 +1059,7 @@ function rehydrateTilesState(tileSystemType, tilesStateJson) {
   throw new TypeError(`Unknown tileSystemType: ${tileSystemType}`);
 }
 
-// game_state.ts
+// game/game_state.ts
 class GameState extends EventTarget {
   playerId;
   keepAllHistory;
@@ -1512,7 +1512,7 @@ class GameState extends EventTarget {
   }
   addGameParams(params) {
     const defaults = new Settings;
-    params.set("ver", this.settings.version);
+    params.set("v", this.settings.version);
     if (!playersEqual(this.settings.players, defaults.players)) {
       this.settings.players.forEach((p, index) => {
         params.set(`p${index + 1}n`, p.name);
@@ -1543,7 +1543,7 @@ class GameState extends EventTarget {
   }
   static async fromParams(params, playerId) {
     const settings = new Settings;
-    const verParam = params.get("ver");
+    const verParam = params.get("v");
     if (verParam && verParam !== settings.version) {
       throw new Error(`Protocol version not supported: ${verParam}`);
     }
@@ -1687,7 +1687,7 @@ function playersEqual(ps1, ps2) {
   return true;
 }
 
-// dialog.ts
+// view/dialog.ts
 class Dialog {
   title;
   content;
@@ -1735,7 +1735,7 @@ class Dialog {
   }
 }
 
-// view.ts
+// view/view.ts
 class View {
   gameContainer;
   boardContainer;
@@ -2097,6 +2097,17 @@ class View {
     bingoInput.value = String(this.gameState.settings.bingoBonus);
     bingoContainer.appendChild(bingoInput);
     content.appendChild(bingoContainer);
+    const seedContainer = this.doc.createElement("div");
+    seedContainer.className = "settings-group";
+    const seedHeader = this.doc.createElement("h3");
+    seedHeader.textContent = "Random Seed";
+    seedContainer.appendChild(seedHeader);
+    const seedInput = this.doc.createElement("input");
+    seedInput.type = "text";
+    seedInput.id = "random-seed";
+    seedInput.value = this.gameState.settings.tileSystemSettings.seed;
+    seedContainer.appendChild(seedInput);
+    content.appendChild(seedContainer);
     dialog.appendChild(content);
     const buttonsContainer = this.doc.createElement("div");
     buttonsContainer.className = "buttons";
@@ -2120,7 +2131,8 @@ class View {
       }
       const bingoBonus = this.doc.getElementById("bingo-bonus").value;
       params.set("bingo", bingoBonus);
-      params.set("seed", String(Math.floor(1e6 * this.browser.getRandom())));
+      const seed = this.doc.getElementById("random-seed").value;
+      params.set("seed", seed || String(Math.floor(1e6 * this.browser.getRandom())));
       this.browser.setHash(params.toString());
       this.showSettingsDialog();
     });
@@ -2131,7 +2143,7 @@ class View {
   }
 }
 
-// key_handler.ts
+// controller/key_handler.ts
 class KeyHandler {
   gameState;
   view;
@@ -2280,7 +2292,7 @@ class KeyHandler {
   }
 }
 
-// pointer_handler.ts
+// controller/pointer_handler.ts
 class PointerHandler {
   gameState;
   view;
@@ -2364,7 +2376,7 @@ class PointerHandler {
   }
 }
 
-// controller.ts
+// controller/controller.ts
 class Controller {
   gameState;
   view;
@@ -2465,6 +2477,14 @@ class DomBrowser {
   hasClipboard() {
     return "clipboard" in navigator;
   }
+  addPasteListener(listener) {
+    window.addEventListener("paste", (event) => {
+      const text = event.clipboardData?.getData("text/plain");
+      if (text) {
+        listener(text);
+      }
+    });
+  }
 }
 
 // app.ts
@@ -2538,7 +2558,22 @@ class App {
       });
     };
     this.browser.addHashChangeListener(handleGameChange);
+    this.browser.addPasteListener(this.handlePaste.bind(this));
     await handleGameChange();
+  }
+  async handlePaste(pastedText) {
+    try {
+      const url = new URL(pastedText);
+      const Href = this.browser.getHref();
+      if (url.origin !== new URL(Href).origin || url.pathname !== new URL(Href).pathname) {
+        return;
+      }
+      const params = this.browser.getURLSearchParams(url.hash.substring(1));
+      if (!params.has("gid")) {
+        return;
+      }
+      await this.gameState.applyTurnParams(params);
+    } catch (e) {}
   }
 }
 if (typeof window !== "undefined") {
