@@ -587,6 +587,46 @@ class Turn {
     }
   }
 }
+function updateTurnHistory({
+  history,
+  nextTurnNumber: nextTurnNumber2,
+  finalTurnNumber,
+  turns
+}) {
+  let wroteHistory = false;
+  for (const turn of turns) {
+    if (fromTurnNumber(turn.turnNumber) >= nextTurnNumber2) {
+      break;
+    }
+    if (history.length && fromTurnNumber(turn.turnNumber) <= fromTurnNumber(history.slice(-1)[0].turnNumber)) {
+      continue;
+    }
+    const params = new URLSearchParams;
+    const addExtra = () => {
+      if (turn.extraParams) {
+        for (const [key, value] of turn.extraParams) {
+          params.set(key, value);
+        }
+      }
+    };
+    if ("playTiles" in turn.move) {
+      params.set("wl", `${turn.row}.${turn.col}`);
+      addExtra();
+      if (turn.blanks?.length)
+        params.set("bt", turn.blanks.join("."));
+      params.set(turn.vertical ? "wv" : "wh", turn.mainWord);
+    } else if ("exchangeTileIndices" in turn.move) {
+      params.set("ex", turn.move.exchangeTileIndices.join("."));
+      addExtra();
+    }
+    history.push({ turnNumber: turn.turnNumber, paramsStr: String(params) });
+    wroteHistory = true;
+    if (turn.turnNumber === finalTurnNumber) {
+      return { wroteHistory };
+    }
+  }
+  return { wroteHistory };
+}
 
 // game/tile.ts
 var MIN_TILE_VALUE = 0;
@@ -783,9 +823,11 @@ class HonorSystemTilesState extends EventTarget {
   }
   playTurns(...turnsToPlay) {
     for (const turn of turnsToPlay) {
+      if (this.isGameOver)
+        return Promise.resolve(toTurnNumber(this.numberOfTurnsPlayed));
       this.playOneTurn(turn);
     }
-    return Promise.resolve(this.stateId);
+    return Promise.resolve(null);
   }
   playOneTurn(turn) {
     const rack = this.getRack(turn.playerId);
@@ -1481,30 +1523,29 @@ class GameState extends EventTarget {
     return await this.tilesState.getTiles(playerId);
   }
   get turnUrlParams() {
-    const urlParams = new URLSearchParams([["gid", this.gameId]]);
+    const entries = [["gid", fromGameId(this.gameId)]];
     const turnHistory = this.history.slice(1 - this.players.length);
     const firstHistoryTurnNumber = turnHistory[0]?.turnNumber;
     if (firstHistoryTurnNumber === undefined || firstHistoryTurnNumber === toTurnNumber(1)) {
-      for (const [name, value] of this.gameParams)
-        urlParams.append(name, value);
+      entries.push(...this.gameParams);
     }
     if (turnHistory.length) {
-      urlParams.append("tn", String(firstHistoryTurnNumber));
-      const turnParams = [];
+      entries.push(["tn", String(firstHistoryTurnNumber)]);
       turnHistory.forEach((turnData) => {
-        turnParams.push(new URLSearchParams(turnData.params));
+        entries.push(...new URLSearchParams(turnData.paramsStr));
       });
-      const flatTurnParams = turnParams.map((p) => [...p]).flat();
-      return new URLSearchParams([...urlParams, ...flatTurnParams]);
     } else {
-      urlParams.append("tn", "1");
-      return urlParams;
+      entries.push(["tn", "1"]);
     }
+    return new URLSearchParams(entries);
   }
   get playerWhoseTurnItIs() {
     if (this.isGameOver)
       return null;
-    return this.players[(fromTurnNumber(this.nextTurnNumber) - 1) % this.players.length];
+    return this.getPlayerForTurnNumber(this.nextTurnNumber);
+  }
+  getPlayerForTurnNumber(turnNumber) {
+    return this.players[(fromTurnNumber(turnNumber) - 1) % this.players.length];
   }
   tiledraw(evt) {
     if (evt.detail.playerId === this.playerId) {
@@ -1627,23 +1668,19 @@ class GameState extends EventTarget {
     await this.playTurns(turn);
   }
   recallTiles() {
-    const rackSpots = new Set(this.tilesHeld.filter((p) => p.row === "rack").map((p) => p.col));
     const placedTiles = this.tilesHeld.filter((p) => p.row !== "rack");
+    const occupiedRackSpots = new Set(this.tilesHeld.filter((p) => p.row === "rack").map((p) => p.col));
+    let nextFreeSpot = 0;
     for (const placement of placedTiles) {
-      let rackCol = 0;
-      while (rackSpots.has(rackCol)) {
-        rackCol++;
+      while (occupiedRackSpots.has(nextFreeSpot)) {
+        ++nextFreeSpot;
       }
-      if (rackCol >= this.settings.rackCapacity) {
-        console.error("No space in rack to recall tile");
+      if (nextFreeSpot >= this.settings.rackCapacity) {
+        console.error("No space in rack to recall tile.");
         break;
       }
-      const fromRow = placement.row;
-      const fromCol = placement.col;
-      placement.row = "rack";
-      placement.col = rackCol;
-      rackSpots.add(rackCol);
-      this.dispatchEvent(new TileEvent("tilemove", { detail: { fromRow, fromCol, placement } }));
+      this.moveTile(placement.row, placement.col, "rack", nextFreeSpot);
+      ++nextFreeSpot;
     }
   }
   async playTurns(...turns) {
@@ -1661,52 +1698,29 @@ class GameState extends EventTarget {
         }
       }
     }
-    await this.tilesState.playTurns(...turns);
-    let wroteHistory = false;
-    for (const turn of turns) {
-      if (fromTurnNumber(turn.turnNumber) >= this.nextTurnNumber) {
-        break;
-      }
-      if (this.history.length && fromTurnNumber(turn.turnNumber) <= fromTurnNumber(this.history.slice(-1)[0].turnNumber)) {
-        continue;
-      }
-      const params = new URLSearchParams;
-      const addExtra = () => {
-        if (turn.extraParams) {
-          for (const [key, value] of turn.extraParams) {
-            params.set(key, value);
-          }
+    const finalTurnNumber = await this.tilesState.playTurns(...turns);
+    const { wroteHistory } = updateTurnHistory({
+      history: this.history,
+      nextTurnNumber: this.nextTurnNumber,
+      finalTurnNumber,
+      turns
+    });
+    if (finalTurnNumber !== null) {
+      const finalTurnPlayerId = this.getPlayerForTurnNumber(finalTurnNumber).id;
+      console.log(`Player ${finalTurnPlayerId} ends game after turn ${finalTurnNumber}.`);
+      let allTilesSum = 0;
+      for (const player of this.players) {
+        if (player.id !== finalTurnPlayerId) {
+          const playerTiles = await this.getTiles(player.id);
+          const tilesSum = playerTiles.reduce((sum, curr) => sum + curr.value, 0);
+          this.board.scores.set(player.id, (this.board.scores.get(player.id) ?? 0) - tilesSum);
+          console.log(`Transfering ${tilesSum} from Player ${player.id}.`);
+          allTilesSum += tilesSum;
         }
-      };
-      if ("playTiles" in turn.move) {
-        params.set("wl", `${turn.row}.${turn.col}`);
-        addExtra();
-        if (turn.blanks?.length)
-          params.set("bt", turn.blanks.join("."));
-        params.set(turn.vertical ? "wv" : "wh", turn.mainWord);
-      } else if ("exchangeTileIndices" in turn.move) {
-        params.set("ex", turn.move.exchangeTileIndices.join("."));
-        addExtra();
       }
-      this.history.push({ turnNumber: turn.turnNumber, params: String(params) });
-      wroteHistory = true;
-      if (this.isGameOver) {
-        console.log(`Player ${turn.playerId} ends game after turn ${turn.turnNumber}.`);
-        let allTilesSum = 0;
-        for (const player of this.players) {
-          if (player.id !== turn.playerId) {
-            const playerTiles = await this.getTiles(player.id);
-            const tilesSum = playerTiles.reduce((sum, curr) => sum + curr.value, 0);
-            this.board.scores.set(player.id, (this.board.scores.get(player.id) ?? 0) - tilesSum);
-            console.log(`Transfering ${tilesSum} from Player ${player.id}.`);
-            allTilesSum += tilesSum;
-          }
-        }
-        console.log(`Transfering ${allTilesSum} to Player ${turn.playerId}.`);
-        this.board.scores.set(turn.playerId, (this.board.scores.get(turn.playerId) ?? 0) + allTilesSum);
-        this.dispatchEvent(new GameEvent("gameover"));
-        break;
-      }
+      console.log(`Transfering ${allTilesSum} to Player ${finalTurnPlayerId}.`);
+      this.board.scores.set(finalTurnPlayerId, (this.board.scores.get(finalTurnPlayerId) ?? 0) + allTilesSum);
+      this.dispatchEvent(new GameEvent("gameover"));
     }
     if (!this.keepAllHistory) {
       const turnsToKeep = this.players.length - 1;
