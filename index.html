@@ -598,8 +598,10 @@ function updateTurnHistory({
     if (fromTurnNumber(turn.turnNumber) >= nextTurnNumber2) {
       break;
     }
-    if (history.length && fromTurnNumber(turn.turnNumber) <= fromTurnNumber(history.slice(-1)[0].turnNumber)) {
-      continue;
+    if (history.length) {
+      const latestTurnNumber = fromTurnNumber(history.slice(-1)[0].turnNumber);
+      if (fromTurnNumber(turn.turnNumber) <= latestTurnNumber)
+        continue;
     }
     const params = new URLSearchParams;
     const addExtra = () => {
@@ -621,9 +623,8 @@ function updateTurnHistory({
     }
     history.push({ turnNumber: turn.turnNumber, paramsStr: String(params) });
     wroteHistory = true;
-    if (turn.turnNumber === finalTurnNumber) {
-      return { wroteHistory };
-    }
+    if (turn.turnNumber === finalTurnNumber)
+      break;
   }
   return { wroteHistory };
 }
@@ -1447,15 +1448,16 @@ class GameState extends EventTarget {
   keepAllHistory;
   tilesHeld;
   history;
+  pendingExtraParams;
   shared;
-  pendingExtraParams = new URLSearchParams;
   gameParams;
-  constructor(playerId, settings, keepAllHistory = false, shared, tilesHeld = [], history = []) {
+  constructor(playerId, settings, keepAllHistory = false, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
     this.keepAllHistory = keepAllHistory;
     this.tilesHeld = tilesHeld;
     this.history = history;
+    this.pendingExtraParams = pendingExtraParams;
     if (!shared) {
       if (!settings) {
         throw new Error("New GameState requires either a Settings or a SharedState.");
@@ -1649,6 +1651,22 @@ class GameState extends EventTarget {
     }
     return { success: true, placement, toRow, toCol, pushDirection, toPush };
   }
+  recallTiles() {
+    const placedTiles = this.tilesHeld.filter((p) => p.row !== "rack");
+    const occupiedRackSpots = new Set(this.tilesHeld.filter((p) => p.row === "rack").map((p) => p.col));
+    let nextFreeSpot = 0;
+    for (const placement of placedTiles) {
+      while (occupiedRackSpots.has(nextFreeSpot)) {
+        ++nextFreeSpot;
+      }
+      if (nextFreeSpot >= this.settings.rackCapacity) {
+        console.error("No space in rack to recall tile.");
+        break;
+      }
+      this.moveTile(placement.row, placement.col, "rack", nextFreeSpot);
+      ++nextFreeSpot;
+    }
+  }
   async playWord() {
     const placements = this.tilesHeld.filter(isBoardPlacement);
     if (placements.length === 0) {
@@ -1666,22 +1684,6 @@ class GameState extends EventTarget {
     turn.extraParams = this.pendingExtraParams;
     this.pendingExtraParams = new URLSearchParams;
     await this.playTurns(turn);
-  }
-  recallTiles() {
-    const placedTiles = this.tilesHeld.filter((p) => p.row !== "rack");
-    const occupiedRackSpots = new Set(this.tilesHeld.filter((p) => p.row === "rack").map((p) => p.col));
-    let nextFreeSpot = 0;
-    for (const placement of placedTiles) {
-      while (occupiedRackSpots.has(nextFreeSpot)) {
-        ++nextFreeSpot;
-      }
-      if (nextFreeSpot >= this.settings.rackCapacity) {
-        console.error("No space in rack to recall tile.");
-        break;
-      }
-      this.moveTile(placement.row, placement.col, "rack", nextFreeSpot);
-      ++nextFreeSpot;
-    }
   }
   async playTurns(...turns) {
     if (this.isGameOver) {
@@ -1766,7 +1768,7 @@ class GameState extends EventTarget {
     let wordPlayed = null;
     let exchangeIndicesStr = null;
     const processPendingMoveIfAny = () => {
-      const playerId = this.players[(urlTurnNumber - 1) % this.players.length].id;
+      const playerId = this.getPlayerForTurnNumber(toTurnNumber(urlTurnNumber)).id;
       if (wordPlayed && direction && wordLocationStr) {
         if (exchangeIndicesStr) {
           throw new Error(`URL contains both word and exchange data for turn ${urlTurnNumber}`);
@@ -1878,7 +1880,6 @@ class GameState extends EventTarget {
       }
     }
     processPendingMoveIfAny();
-    this.dispatchEvent(new GameEvent("turnchange"));
     await this.playTurns(...turns);
   }
   getGameParams() {
@@ -2008,7 +2009,10 @@ class GameState extends EventTarget {
           json.assignedLetter = placement.assignedLetter;
         return json;
       }),
-      history: this.history
+      history: this.history.map((turnData) => {
+        return { turnNumber: turnData.turnNumber, params: turnData.paramsStr };
+      }),
+      pendingExtraParams: this.pendingExtraParams.toString()
     };
   }
   static async fromJSON(json) {
@@ -2017,7 +2021,7 @@ class GameState extends EventTarget {
     }
     if (typeof json !== "object")
       fail("Not an object");
-    if (!arraysEqual([...Object.keys(json)], ["shared", "playerId", "keepAllHistory", "tilesHeld", "history"])) {
+    if (!arraysEqual([...Object.keys(json)], ["shared", "playerId", "keepAllHistory", "tilesHeld", "history", "pendingExtraParams"])) {
       fail("Wrong keys or key order");
     }
     if (typeof json.playerId !== "string")
@@ -2028,6 +2032,8 @@ class GameState extends EventTarget {
       fail("tilesHeld is not an array");
     if (!Array.isArray(json.history))
       fail("History is not an array");
+    if (typeof json.pendingExtraParams !== "string")
+      fail("pendingExtraParams is not a string");
     const tilesHeld = json.tilesHeld.map((tileJson) => {
       if (typeof tileJson !== "object")
         fail("tilesHeld element is not an object");
@@ -2054,7 +2060,17 @@ class GameState extends EventTarget {
         result.assignedLetter = tileJson.assignedLetter;
       return result;
     });
-    const gameState = new GameState(json.playerId, undefined, json.keepAllHistory, SharedState.fromJSON(json.shared), tilesHeld, json.history);
+    const history = json.history.map((turnDataJson) => {
+      if (!arraysEqual([...Object.keys(turnDataJson)], ["turnNumber", "params"])) {
+        fail("Wrong history element keys or key order");
+      }
+      if (typeof turnDataJson.turnNumber !== "number")
+        fail("turnNumber is not a number");
+      if (typeof turnDataJson.params !== "string")
+        fail("params is not a string");
+      return { turnNumber: toTurnNumber(turnDataJson.turnNumber), paramsStr: turnDataJson.params };
+    });
+    const gameState = new GameState(json.playerId, undefined, json.keepAllHistory, SharedState.fromJSON(json.shared), tilesHeld, history, new URLSearchParams(json.pendingExtraParams));
     await gameState.init();
     return gameState;
   }
@@ -2129,7 +2145,16 @@ class View {
   dropTarget = null;
   doc;
   browser;
-  settingsDialog = null;
+  settingsDialog;
+  playerList;
+  addPlayerButton;
+  dictionaryType;
+  dictionaryUrlContainer;
+  dictionaryUrl;
+  bingoBonus;
+  randomSeed;
+  startGameButton;
+  cancelSettingsButton;
   constructor(gameState, browser) {
     this.gameState = gameState;
     this.browser = browser;
@@ -2140,7 +2165,18 @@ class View {
     this.exchangeContainer = this.gameContainer.querySelector("#exchange-container");
     this.scorePanel = this.gameContainer.querySelector("#score-panel");
     this.bagTileCountContainer = this.gameContainer.querySelector("#bag-tile-count-container");
+    this.settingsDialog = this.doc.getElementById("settings-dialog");
+    this.playerList = this.doc.getElementById("player-list");
+    this.addPlayerButton = this.doc.getElementById("add-player-button");
+    this.dictionaryType = this.doc.getElementById("dictionary-type");
+    this.dictionaryUrlContainer = this.doc.getElementById("dictionary-url-container");
+    this.dictionaryUrl = this.doc.getElementById("dictionary-url");
+    this.bingoBonus = this.doc.getElementById("bingo-bonus");
+    this.randomSeed = this.doc.getElementById("random-seed");
+    this.startGameButton = this.doc.getElementById("start-game-with-settings");
+    this.cancelSettingsButton = this.doc.getElementById("cancel-settings");
     this.gameState.addEventListener("turnchange", () => this.renderScores());
+    this._bindSettingsDialogEvents();
   }
   addTileToElement(element, tile, assignedLetter) {
     element.textContent = "";
@@ -2371,157 +2407,87 @@ class View {
       copyUrl: result === "OK" && (copyUrlCheckbox?.checked ?? false)
     };
   }
-  showSettingsDialog() {
-    if (this.settingsDialog) {
-      this.settingsDialog.remove();
-      this.settingsDialog = null;
-      return;
-    }
-    const dialog = this.doc.createElement("div");
-    dialog.id = "settings-dialog";
-    const content = this.doc.createElement("div");
-    content.className = "content";
-    const playersContainer = this.doc.createElement("div");
-    playersContainer.className = "settings-group";
-    const playersHeader = this.doc.createElement("h3");
-    playersHeader.textContent = "Players";
-    playersContainer.appendChild(playersHeader);
-    const playerList = this.doc.createElement("div");
-    playerList.id = "player-list";
-    const updatePlayerList = (players) => {
-      playerList.innerHTML = "";
-      players.forEach((player, index) => {
-        const playerEntry = this.doc.createElement("div");
-        playerEntry.className = "player-entry";
-        const input = this.doc.createElement("input");
-        input.type = "text";
-        input.value = player.name;
-        input.placeholder = `Player ${index + 1}`;
-        playerEntry.appendChild(input);
-        const removeButton = this.doc.createElement("button");
-        removeButton.textContent = "-";
-        removeButton.onclick = () => {
-          const currentPlayers = Array.from(playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
-          currentPlayers.splice(index, 1);
-          updatePlayerList(currentPlayers);
-        };
-        playerEntry.appendChild(removeButton);
-        playerList.appendChild(playerEntry);
-      });
-    };
-    updatePlayerList(this.gameState.players.map((p) => ({ name: p.name })));
-    const addButton = this.doc.createElement("button");
-    addButton.textContent = "+";
-    addButton.onclick = () => {
-      const currentPlayers = Array.from(playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
+  _bindSettingsDialogEvents() {
+    this.addPlayerButton.addEventListener("click", () => {
+      const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
       currentPlayers.push({ name: "" });
-      updatePlayerList(currentPlayers);
-    };
-    playersContainer.appendChild(playerList);
-    playersContainer.appendChild(addButton);
-    content.appendChild(playersContainer);
-    const dictionaryContainer = this.doc.createElement("div");
-    dictionaryContainer.className = "settings-group";
-    const dictionaryHeader = this.doc.createElement("h3");
-    dictionaryHeader.textContent = "Dictionary";
-    dictionaryContainer.appendChild(dictionaryHeader);
-    const dictOptions = [
-      { value: "permissive", text: "Anything is a word" },
-      { value: "freeapi", text: "freeapi" },
-      { value: "custom", text: "custom" }
-    ];
-    const urlInputContainer = this.doc.createElement("div");
-    urlInputContainer.style.display = "none";
-    const urlInput = this.doc.createElement("input");
-    urlInput.type = "text";
-    urlInput.id = "dictionary-url";
-    urlInput.placeholder = "URL";
-    const urlLabel = this.doc.createElement("label");
-    urlLabel.textContent = "URL: ";
-    urlInputContainer.appendChild(urlLabel);
-    urlInputContainer.appendChild(urlInput);
-    const dictSelect = this.doc.createElement("select");
-    dictSelect.id = "dictionary-type";
-    dictOptions.forEach((opt) => {
-      const option = this.doc.createElement("option");
-      option.value = opt.value;
-      option.textContent = opt.text;
-      if (this.gameState.settings.dictionaryType === opt.value) {
-        option.selected = true;
-      }
-      dictSelect.appendChild(option);
+      this._updatePlayerList(currentPlayers);
     });
-    dictionaryContainer.appendChild(dictSelect);
-    const handleDictChange = () => {
-      const selectedValue = dictSelect.value;
-      if (selectedValue === "freeapi" || selectedValue === "custom") {
-        urlInputContainer.style.display = "block";
-        urlInput.required = selectedValue === "custom";
-      } else {
-        urlInputContainer.style.display = "none";
-      }
-    };
-    dictSelect.addEventListener("change", handleDictChange);
-    dictionaryContainer.appendChild(urlInputContainer);
-    content.appendChild(dictionaryContainer);
-    handleDictChange();
-    if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
-      urlInput.value = this.gameState.settings.dictionarySettings.url;
-    }
-    const bingoContainer = this.doc.createElement("div");
-    bingoContainer.className = "settings-group";
-    const bingoHeader = this.doc.createElement("h3");
-    bingoHeader.textContent = "Bingo Bonus";
-    bingoContainer.appendChild(bingoHeader);
-    const bingoInput = this.doc.createElement("input");
-    bingoInput.type = "number";
-    bingoInput.id = "bingo-bonus";
-    bingoInput.value = String(this.gameState.settings.bingoBonus);
-    bingoContainer.appendChild(bingoInput);
-    content.appendChild(bingoContainer);
-    const seedContainer = this.doc.createElement("div");
-    seedContainer.className = "settings-group";
-    const seedHeader = this.doc.createElement("h3");
-    seedHeader.textContent = "Random Seed";
-    seedContainer.appendChild(seedHeader);
-    const seedInput = this.doc.createElement("input");
-    seedInput.type = "text";
-    seedInput.id = "random-seed";
-    seedInput.value = this.gameState.settings.tileSystemSettings.seed;
-    seedContainer.appendChild(seedInput);
-    content.appendChild(seedContainer);
-    dialog.appendChild(content);
-    const buttonsContainer = this.doc.createElement("div");
-    buttonsContainer.className = "buttons";
-    const startButton = this.doc.createElement("button");
-    startButton.id = "start-game-with-settings";
-    startButton.textContent = "Start Game with Settings";
-    startButton.addEventListener("click", () => {
+    this.dictionaryType.addEventListener("change", () => this._handleDictChange());
+    this.startGameButton.addEventListener("click", () => {
       const params = new URLSearchParams;
-      const playerInputs = Array.from(playerList.querySelectorAll("input"));
+      const playerInputs = Array.from(this.playerList.querySelectorAll("input"));
       const playerNames = playerInputs.map((input) => input.value).filter((name) => name.trim() !== "");
-      if (playerNames.length > 0) {
-        params.set("p", playerNames.join(","));
-      }
-      const dictionaryType = this.doc.getElementById("dictionary-type").value;
+      playerNames.map((name, index) => {
+        params.set(`p${index + 1}n`, name);
+      });
+      const dictionaryType = this.dictionaryType.value;
       params.set("dt", dictionaryType);
       if (dictionaryType === "freeapi" || dictionaryType === "custom") {
-        const url = this.doc.getElementById("dictionary-url").value;
+        const url = this.dictionaryUrl.value;
         if (url) {
           params.set("ds", url);
         }
       }
-      const bingoBonus = this.doc.getElementById("bingo-bonus").value;
-      params.set("bingo", bingoBonus);
-      const seed = this.doc.getElementById("random-seed").value;
-      params.set("seed", seed || String(Math.floor(1e6 * this.browser.getRandom())));
-      this.browser.setHash(params.toString());
-      this.showSettingsDialog();
+      params.set("bingo", this.bingoBonus.value);
+      params.set("seed", this.randomSeed.value || String(Math.floor(1e6 * this.browser.getRandom())));
+      const newUrl = new URL(this.browser.getHref());
+      newUrl.hash = params.toString();
+      this.browser.setLocation(newUrl.toString());
     });
-    buttonsContainer.appendChild(startButton);
-    dialog.appendChild(buttonsContainer);
-    this.settingsDialog = dialog;
-    this.gameContainer.querySelector("#controls-container").appendChild(dialog);
+    this.cancelSettingsButton.addEventListener("click", () => {
+      this.settingsDialog.hidden = true;
+    });
+  }
+  _updatePlayerList(players) {
+    this.playerList.innerHTML = "";
+    players.forEach((player, index) => {
+      const playerEntry = this.doc.createElement("div");
+      playerEntry.className = "player-entry";
+      const input = this.doc.createElement("input");
+      input.type = "text";
+      input.value = player.name;
+      input.placeholder = `Player ${index + 1}`;
+      playerEntry.appendChild(input);
+      const removeButton = this.doc.createElement("button");
+      removeButton.textContent = "-";
+      removeButton.onclick = () => {
+        const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
+        currentPlayers.splice(index, 1);
+        this._updatePlayerList(currentPlayers);
+      };
+      playerEntry.appendChild(removeButton);
+      this.playerList.appendChild(playerEntry);
+    });
+  }
+  _handleDictChange() {
+    const selectedValue = this.dictionaryType.value;
+    if (selectedValue === "freeapi" || selectedValue === "custom") {
+      this.dictionaryUrlContainer.hidden = false;
+      this.dictionaryUrl.required = selectedValue === "custom";
+    } else {
+      this.dictionaryUrlContainer.hidden = true;
+    }
+  }
+  _populateSettingsDialog() {
+    this._updatePlayerList(this.gameState.players.map((p) => ({ name: p.name })));
+    this.dictionaryType.value = this.gameState.settings.dictionaryType;
+    this._handleDictChange();
+    if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
+      this.dictionaryUrl.value = this.gameState.settings.dictionarySettings.url;
+    } else {
+      this.dictionaryUrl.value = "";
+    }
+    this.bingoBonus.value = String(this.gameState.settings.bingoBonus);
+    this.randomSeed.value = this.gameState.settings.tileSystemSettings.seed;
+  }
+  showSettingsDialog() {
+    if (this.settingsDialog.hidden) {
+      this._populateSettingsDialog();
+      this.settingsDialog.hidden = false;
+    } else {
+      this.settingsDialog.hidden = true;
+    }
   }
 }
 
@@ -2867,6 +2833,9 @@ class DomBrowser {
       }
     });
   }
+  setLocation(url) {
+    window.location.href = url;
+  }
 }
 
 // app.ts
@@ -2896,19 +2865,23 @@ class App {
       const gidParam = params.get("gid");
       const gameId = gidParam ? toGameId(gidParam) : makeGameId();
       if (this.gameState?.gameId === gameId) {
-        await this.gameState.applyTurnParams(params);
+        const hash = this.browser.getHash()?.substring(1);
+        const paramsStr = this.gameState.turnUrlParams.toString();
+        if (hash !== paramsStr) {
+          await this.gameState.applyTurnParams(params);
+        }
         return;
       }
       const savedGame = gidParam && this.browser.getLocalStorageItem(`sharewords_${gidParam}`);
       if (savedGame) {
-        console.log(`Loaded ${gameId} from local storage${this.gameState ? " and switched from " + this.gameState.gameId + " to it" : ""}.`);
+        console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
         this.gameState = await GameState.fromJSON(JSON.parse(savedGame));
       } else {
         if (!params.get("seed"))
           params.set("seed", String(Math.floor(1e6 * this.browser.getRandom())));
         this.gameState = await GameState.fromParams(params);
+        this.saveGameState();
       }
-      this.saveGameState();
       this.updateUrl();
       this.view = new View(this.gameState, this.browser);
       this.controller = new Controller(this.gameState, this.view, this.browser);
@@ -2981,6 +2954,38 @@ if (typeof window !== "undefined") {
           <button id="pass-exchange">Pass/Exchange</button>
           <button id="recall-tiles">Recall Tiles</button>
           <button id="game-setup">Game Setup</button>
+        </div>
+        <div id="settings-dialog" hidden>
+          <div class="content">
+            <div class="settings-group">
+              <h3>Players</h3>
+              <div id="player-list"></div>
+              <button id="add-player-button">+</button>
+            </div>
+            <div class="settings-group">
+              <h3>Dictionary</h3>
+              <select id="dictionary-type">
+                <option value="permissive">Anything is a word</option>
+                <option value="freeapi">freeapi</option>
+                <option value="custom">custom</option>
+              </select>
+              <div id="dictionary-url-container" hidden>
+                <label>URL: <input type="text" id="dictionary-url" placeholder="URL"></label>
+              </div>
+            </div>
+            <div class="settings-group">
+              <h3>Bingo Bonus</h3>
+              <input type="number" id="bingo-bonus">
+            </div>
+            <div class="settings-group">
+              <h3>Random Seed</h3>
+              <input type="text" id="random-seed">
+            </div>
+          </div>
+          <div class="buttons">
+            <button id="start-game-with-settings">Start Game with Settings</button>
+            <button id="cancel-settings">Cancel</button>
+          </div>
         </div>
       </div>
     </div>
