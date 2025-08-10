@@ -2431,9 +2431,8 @@ class View {
       }
       params.set("bingo", this.bingoBonus.value);
       params.set("seed", this.randomSeed.value || String(Math.floor(1e6 * this.browser.getRandom())));
-      const newUrl = new URL(this.browser.getHref());
-      newUrl.hash = params.toString();
-      this.browser.setLocation(newUrl.toString());
+      this.browser.setHash(params.toString());
+      this.browser.reload();
     });
     this.cancelSettingsButton.addEventListener("click", () => {
       this.settingsDialog.hidden = true;
@@ -2792,6 +2791,10 @@ class Controller {
 
 // browser.ts
 class DomBrowser {
+  reload() {
+    console.log(`Reloading: ${window.location}`);
+    window.location.reload();
+  }
   getHash() {
     return window.location.hash;
   }
