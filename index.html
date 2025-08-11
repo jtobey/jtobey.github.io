@@ -11,13 +11,22 @@
 }
 
 #board-container {
-  display: grid;
-  grid-template-columns: repeat(15, 40px);
-  grid-template-rows: repeat(15, 40px);
-  background-color: #ccc;
+  overflow: hidden;
+  position: relative;
+  touch-action: none;
   border: 1px solid #ccc;
   width: 601px;
   height: 601px;
+}
+
+#board-transformer {
+  display: grid;
+  grid-template-columns: repeat(15, 40px);
+  grid-template-rows: repeat(15, 40px);
+  transform-origin: 0 0;
+  background-color: #ccc;
+  width: 100%;
+  height: 100%;
 }
 
 .square {
@@ -189,10 +198,13 @@
 
 @media (max-width: 601px) {
   #board-container {
-    grid-template-columns: repeat(15, 1fr);
-    grid-template-rows: repeat(15, 1fr);
     width: 98vw;
     height: 98vw;
+  }
+
+  #board-transformer {
+    grid-template-columns: repeat(15, 1fr);
+    grid-template-rows: repeat(15, 1fr);
   }
 
   .square {
@@ -266,8 +278,11 @@ dialog button {
   }
 
   #board-container {
-    background-color: #111;
     border-color: #444;
+  }
+
+  #board-transformer {
+    background-color: #111;
   }
 
   .square {
@@ -2133,18 +2148,11 @@ class Dialog {
   }
 }
 
-// view/view.ts
-class View {
-  gameContainer;
-  boardContainer;
-  rackContainer;
-  exchangeContainer;
-  scorePanel;
-  bagTileCountContainer;
+// view/game_setup.ts
+class GameSetup {
   gameState;
-  dropTarget = null;
-  doc;
   browser;
+  doc;
   settingsDialog;
   playerList;
   addPlayerButton;
@@ -2159,12 +2167,6 @@ class View {
     this.gameState = gameState;
     this.browser = browser;
     this.doc = browser.getDocument();
-    this.gameContainer = this.doc.getElementById("game-container");
-    this.boardContainer = this.gameContainer.querySelector("#board-container");
-    this.rackContainer = this.gameContainer.querySelector("#rack-container");
-    this.exchangeContainer = this.gameContainer.querySelector("#exchange-container");
-    this.scorePanel = this.gameContainer.querySelector("#score-panel");
-    this.bagTileCountContainer = this.gameContainer.querySelector("#bag-tile-count-container");
     this.settingsDialog = this.doc.getElementById("settings-dialog");
     this.playerList = this.doc.getElementById("player-list");
     this.addPlayerButton = this.doc.getElementById("add-player-button");
@@ -2175,8 +2177,120 @@ class View {
     this.randomSeed = this.doc.getElementById("random-seed");
     this.startGameButton = this.doc.getElementById("start-game-with-settings");
     this.cancelSettingsButton = this.doc.getElementById("cancel-settings");
-    this.gameState.addEventListener("turnchange", () => this.renderScores());
     this._bindSettingsDialogEvents();
+  }
+  _bindSettingsDialogEvents() {
+    this.addPlayerButton.addEventListener("click", () => {
+      const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
+      currentPlayers.push({ name: "" });
+      this._updatePlayerList(currentPlayers);
+    });
+    this.dictionaryType.addEventListener("change", () => this._handleDictChange());
+    this.startGameButton.addEventListener("click", () => {
+      const params = new URLSearchParams;
+      const playerInputs = Array.from(this.playerList.querySelectorAll("input"));
+      const playerNames = playerInputs.map((input) => input.value).filter((name) => name.trim() !== "");
+      playerNames.map((name, index) => {
+        params.set(`p${index + 1}n`, name);
+      });
+      const dictionaryType = this.dictionaryType.value;
+      params.set("dt", dictionaryType);
+      if (dictionaryType === "freeapi" || dictionaryType === "custom") {
+        const url = this.dictionaryUrl.value;
+        if (url) {
+          params.set("ds", url);
+        }
+      }
+      params.set("bingo", this.bingoBonus.value);
+      params.set("seed", this.randomSeed.value || String(Math.floor(1e6 * this.browser.getRandom())));
+      this.browser.setHash(params.toString());
+      this.browser.reload();
+    });
+    this.cancelSettingsButton.addEventListener("click", () => {
+      this.settingsDialog.hidden = true;
+    });
+  }
+  _updatePlayerList(players) {
+    this.playerList.innerHTML = "";
+    players.forEach((player, index) => {
+      const playerEntry = this.doc.createElement("div");
+      playerEntry.className = "player-entry";
+      const input = this.doc.createElement("input");
+      input.type = "text";
+      input.value = player.name;
+      input.placeholder = `Player ${index + 1}`;
+      playerEntry.appendChild(input);
+      const removeButton = this.doc.createElement("button");
+      removeButton.textContent = "-";
+      removeButton.onclick = () => {
+        const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
+        currentPlayers.splice(index, 1);
+        this._updatePlayerList(currentPlayers);
+      };
+      playerEntry.appendChild(removeButton);
+      this.playerList.appendChild(playerEntry);
+    });
+  }
+  _handleDictChange() {
+    const selectedValue = this.dictionaryType.value;
+    if (selectedValue === "freeapi" || selectedValue === "custom") {
+      this.dictionaryUrlContainer.hidden = false;
+      this.dictionaryUrl.required = selectedValue === "custom";
+    } else {
+      this.dictionaryUrlContainer.hidden = true;
+    }
+  }
+  _populateSettingsDialog() {
+    this._updatePlayerList(this.gameState.players.map((p) => ({ name: p.name })));
+    this.dictionaryType.value = this.gameState.settings.dictionaryType;
+    this._handleDictChange();
+    if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
+      this.dictionaryUrl.value = this.gameState.settings.dictionarySettings.url;
+    } else {
+      this.dictionaryUrl.value = "";
+    }
+    this.bingoBonus.value = String(this.gameState.settings.bingoBonus);
+    this.randomSeed.value = this.gameState.settings.tileSystemSettings.seed;
+  }
+  showSettingsDialog() {
+    if (this.settingsDialog.hidden) {
+      this._populateSettingsDialog();
+      this.settingsDialog.hidden = false;
+    } else {
+      this.settingsDialog.hidden = true;
+    }
+  }
+}
+
+// view/view.ts
+class View {
+  gameContainer;
+  boardContainer;
+  boardTransformer;
+  rackContainer;
+  exchangeContainer;
+  scorePanel;
+  bagTileCountContainer;
+  gameState;
+  gameSetup;
+  dropTarget = null;
+  doc;
+  browser;
+  constructor(gameState, browser) {
+    this.gameState = gameState;
+    this.browser = browser;
+    this.doc = browser.getDocument();
+    this.gameContainer = this.doc.getElementById("game-container");
+    this.boardContainer = this.gameContainer.querySelector("#board-container");
+    this.boardTransformer = this.doc.createElement("div");
+    this.boardTransformer.id = "board-transformer";
+    this.boardContainer.appendChild(this.boardTransformer);
+    this.rackContainer = this.gameContainer.querySelector("#rack-container");
+    this.exchangeContainer = this.gameContainer.querySelector("#exchange-container");
+    this.scorePanel = this.gameContainer.querySelector("#score-panel");
+    this.bagTileCountContainer = this.gameContainer.querySelector("#bag-tile-count-container");
+    this.gameSetup = new GameSetup(gameState, browser);
+    this.gameState.addEventListener("turnchange", () => this.renderScores());
   }
   addTileToElement(element, tile, assignedLetter) {
     element.textContent = "";
@@ -2192,7 +2306,7 @@ class View {
     }
   }
   renderBoard() {
-    this.boardContainer.innerHTML = "";
+    this.boardTransformer.innerHTML = "";
     const centerSquare = this.gameState.board.centerSquare;
     for (let r = 0;r < this.gameState.board.squares.length; r++) {
       const row = this.gameState.board.squares[r];
@@ -2239,7 +2353,7 @@ class View {
               squareDiv.appendChild(bonusSpan);
           }
         }
-        this.boardContainer.appendChild(squareDiv);
+        this.boardTransformer.appendChild(squareDiv);
       }
     }
   }
@@ -2345,7 +2459,11 @@ class View {
     }
   }
   getElementByLocation(row, col) {
-    return this.doc.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+    const selector = `[data-row="${row}"][data-col="${col}"]`;
+    if (typeof row === "number") {
+      return this.boardTransformer.querySelector(selector);
+    }
+    return this.doc.querySelector(selector);
   }
   clearDropTarget() {
     if (this.dropTarget) {
@@ -2407,86 +2525,14 @@ class View {
       copyUrl: result === "OK" && (copyUrlCheckbox?.checked ?? false)
     };
   }
-  _bindSettingsDialogEvents() {
-    this.addPlayerButton.addEventListener("click", () => {
-      const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
-      currentPlayers.push({ name: "" });
-      this._updatePlayerList(currentPlayers);
-    });
-    this.dictionaryType.addEventListener("change", () => this._handleDictChange());
-    this.startGameButton.addEventListener("click", () => {
-      const params = new URLSearchParams;
-      const playerInputs = Array.from(this.playerList.querySelectorAll("input"));
-      const playerNames = playerInputs.map((input) => input.value).filter((name) => name.trim() !== "");
-      playerNames.map((name, index) => {
-        params.set(`p${index + 1}n`, name);
-      });
-      const dictionaryType = this.dictionaryType.value;
-      params.set("dt", dictionaryType);
-      if (dictionaryType === "freeapi" || dictionaryType === "custom") {
-        const url = this.dictionaryUrl.value;
-        if (url) {
-          params.set("ds", url);
-        }
-      }
-      params.set("bingo", this.bingoBonus.value);
-      params.set("seed", this.randomSeed.value || String(Math.floor(1e6 * this.browser.getRandom())));
-      this.browser.setHash(params.toString());
-      this.browser.reload();
-    });
-    this.cancelSettingsButton.addEventListener("click", () => {
-      this.settingsDialog.hidden = true;
-    });
-  }
-  _updatePlayerList(players) {
-    this.playerList.innerHTML = "";
-    players.forEach((player, index) => {
-      const playerEntry = this.doc.createElement("div");
-      playerEntry.className = "player-entry";
-      const input = this.doc.createElement("input");
-      input.type = "text";
-      input.value = player.name;
-      input.placeholder = `Player ${index + 1}`;
-      playerEntry.appendChild(input);
-      const removeButton = this.doc.createElement("button");
-      removeButton.textContent = "-";
-      removeButton.onclick = () => {
-        const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
-        currentPlayers.splice(index, 1);
-        this._updatePlayerList(currentPlayers);
-      };
-      playerEntry.appendChild(removeButton);
-      this.playerList.appendChild(playerEntry);
-    });
-  }
-  _handleDictChange() {
-    const selectedValue = this.dictionaryType.value;
-    if (selectedValue === "freeapi" || selectedValue === "custom") {
-      this.dictionaryUrlContainer.hidden = false;
-      this.dictionaryUrl.required = selectedValue === "custom";
-    } else {
-      this.dictionaryUrlContainer.hidden = true;
-    }
-  }
-  _populateSettingsDialog() {
-    this._updatePlayerList(this.gameState.players.map((p) => ({ name: p.name })));
-    this.dictionaryType.value = this.gameState.settings.dictionaryType;
-    this._handleDictChange();
-    if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
-      this.dictionaryUrl.value = this.gameState.settings.dictionarySettings.url;
-    } else {
-      this.dictionaryUrl.value = "";
-    }
-    this.bingoBonus.value = String(this.gameState.settings.bingoBonus);
-    this.randomSeed.value = this.gameState.settings.tileSystemSettings.seed;
-  }
   showSettingsDialog() {
-    if (this.settingsDialog.hidden) {
-      this._populateSettingsDialog();
-      this.settingsDialog.hidden = false;
-    } else {
-      this.settingsDialog.hidden = true;
-    }
+    this.gameSetup.showSettingsDialog();
+  }
+  setBoardTransform(scale, x, y) {
+    this.boardTransformer.style.transform = `scale(${scale}) translate(${x}px, ${y}px)`;
+  }
+  getBoardContainer() {
+    return this.boardContainer;
   }
 }
 
@@ -2645,50 +2691,93 @@ class PointerHandler {
   view;
   draggingTile = null;
   ghostTile = null;
+  scale = 1;
+  panX = 0;
+  panY = 0;
+  panStart = { x: 0, y: 0 };
+  isPanning = false;
+  lastTap = 0;
+  pointerMoved = false;
+  downX = 0;
+  downY = 0;
   constructor(gameState, view) {
     this.gameState = gameState;
     this.view = view;
   }
+  updateTransform() {
+    const boardRect = this.view.getBoardContainer().getBoundingClientRect();
+    const maxPanX = (this.scale * boardRect.width - boardRect.width) / this.scale;
+    const maxPanY = (this.scale * boardRect.height - boardRect.height) / this.scale;
+    this.panX = Math.max(-maxPanX, Math.min(0, this.panX));
+    this.panY = Math.max(-maxPanY, Math.min(0, this.panY));
+    this.view.setBoardTransform(this.scale, this.panX, this.panY);
+  }
+  pointerCancel(evt) {
+    this.isPanning = false;
+  }
   pointerDown(evt) {
-    const tileTarget = evt.target.closest(".tile, .placed");
-    if (!(tileTarget instanceof HTMLElement))
-      return;
     if (evt.button !== 0)
       return;
-    evt.preventDefault();
-    evt.stopPropagation();
-    const col = parseInt(tileTarget.dataset.col, 10);
-    const rowStr = tileTarget.dataset.row;
-    const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
-    this.draggingTile = { row, col, element: tileTarget };
-    this.ghostTile = this.view.createGhostTile(this.draggingTile.element);
-    this.draggingTile.element.classList.add("dragging");
-    this.ghostTile.style.left = `${evt.clientX}px`;
-    this.ghostTile.style.top = `${evt.clientY}px`;
+    const target = evt.target;
+    this.pointerMoved = false;
+    this.downX = evt.clientX;
+    this.downY = evt.clientY;
+    const tileTarget = target.closest(".tile, .placed");
+    if (tileTarget instanceof HTMLElement) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const col = parseInt(tileTarget.dataset.col, 10);
+      const rowStr = tileTarget.dataset.row;
+      const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
+      this.draggingTile = { row, col, element: tileTarget };
+      return;
+    }
+    if (target.closest("#board-container")) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      this.isPanning = true;
+      this.panStart.x = evt.clientX - this.panX;
+      this.panStart.y = evt.clientY - this.panY;
+    }
   }
   pointerMove(evt) {
-    if (!this.draggingTile)
-      return;
-    evt.preventDefault();
-    evt.stopPropagation();
-    this.ghostTile.style.left = `${evt.clientX}px`;
-    this.ghostTile.style.top = `${evt.clientY}px`;
-    this.ghostTile.style.display = "none";
-    const targetElement = document.elementFromPoint(evt.clientX, evt.clientY);
-    this.ghostTile.style.display = "";
-    if (targetElement) {
-      const dropTarget = targetElement.closest(".square, .tile-spot, .tile, .placed");
-      if (dropTarget instanceof HTMLElement && dropTarget.dataset.row && dropTarget.dataset.col) {
-        const toRowStr = dropTarget.dataset.row;
-        const toRow = toRowStr === "rack" ? "rack" : toRowStr === "exchange" ? "exchange" : parseInt(toRowStr, 10);
-        const toCol = parseInt(dropTarget.dataset.col, 10);
-        this.view.setDropTarget(toRow, toCol);
-      } else {
-        this.view.clearDropTarget();
+    if (!this.pointerMoved && Math.hypot(evt.clientX - this.downX, evt.clientY - this.downY) > 5) {
+      this.pointerMoved = true;
+    }
+    if (this.isPanning || this.draggingTile) {
+      evt.preventDefault();
+    }
+    if (this.isPanning) {
+      if (this.scale > 1) {
+        this.panX = evt.clientX - this.panStart.x;
+        this.panY = evt.clientY - this.panStart.y;
+        this.updateTransform();
+      }
+    } else if (this.draggingTile && this.pointerMoved) {
+      if (!this.ghostTile) {
+        this.ghostTile = this.view.createGhostTile(this.draggingTile.element);
+        this.draggingTile.element.classList.add("dragging");
+      }
+      this.ghostTile.style.left = `${evt.clientX}px`;
+      this.ghostTile.style.top = `${evt.clientY}px`;
+      this.ghostTile.style.display = "none";
+      const targetElement = document.elementFromPoint(evt.clientX, evt.clientY);
+      this.ghostTile.style.display = "";
+      if (targetElement) {
+        const dropTarget = targetElement.closest(".square, .tile-spot, .tile, .placed");
+        if (dropTarget instanceof HTMLElement && dropTarget.dataset.row && dropTarget.dataset.col) {
+          const toRowStr = dropTarget.dataset.row;
+          const toRow = toRowStr === "rack" ? "rack" : toRowStr === "exchange" ? "exchange" : parseInt(toRowStr, 10);
+          const toCol = parseInt(dropTarget.dataset.col, 10);
+          this.view.setDropTarget(toRow, toCol);
+        } else {
+          this.view.clearDropTarget();
+        }
       }
     }
   }
   pointerUp(evt) {
+    const target = evt.target;
     if (this.ghostTile) {
       const dropTarget = this.view.getDropTarget();
       if (dropTarget) {
@@ -2698,14 +2787,12 @@ class PointerHandler {
           const toRow = dropTarget.row;
           const toCol = dropTarget.col;
           const selectedPlacement = this.gameState.tilesHeld.find((p) => p.row === fromRow && p.col === fromCol);
-          let assignedLetter;
           if (selectedPlacement?.tile.isBlank && isBoardPlacementRow(toRow)) {
             const letter = prompt("Enter a letter for the blank tile:");
-            if (!letter || letter.length !== 1 || !/^[a-zA-Z]$/.test(letter)) {
+            if (letter && /^[a-zA-Z]$/.test(letter)) {
+              this.gameState.moveTile(fromRow, fromCol, toRow, toCol, letter.toUpperCase());
+            } else if (letter !== null) {
               alert("Invalid letter. Please enter a single letter.");
-            } else {
-              assignedLetter = letter.toUpperCase();
-              this.gameState.moveTile(fromRow, fromCol, toRow, toCol, assignedLetter);
             }
           } else {
             this.gameState.moveTile(fromRow, fromCol, toRow, toCol);
@@ -2716,7 +2803,26 @@ class PointerHandler {
       }
       this.view.removeGhostTile(this.ghostTile);
       this.draggingTile.element.classList.remove("dragging");
+    } else if (target.closest("#board-container") && !this.pointerMoved) {
+      const now = Date.now();
+      if (now - this.lastTap < 300) {
+        if (this.scale > 1) {
+          this.scale = 1;
+          this.panX = 0;
+          this.panY = 0;
+        } else {
+          this.scale = 1.8;
+          const boardRect = this.view.getBoardContainer().getBoundingClientRect();
+          const boardX = evt.clientX - boardRect.left;
+          const boardY = evt.clientY - boardRect.top;
+          this.panX = boardX * (1 - this.scale) / this.scale;
+          this.panY = boardY * (1 - this.scale) / this.scale;
+        }
+        this.updateTransform();
+      }
+      this.lastTap = now;
     }
+    this.isPanning = false;
     this.draggingTile = null;
     this.ghostTile = null;
     this.view.clearDropTarget();
