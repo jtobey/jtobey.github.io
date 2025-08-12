@@ -825,6 +825,14 @@ class HonorSystemTilesState extends EventTarget {
     if (init)
       this.initRacks();
   }
+  copyFrom(other) {
+    if (!(other instanceof HonorSystemTilesState))
+      throw new TypeError;
+    this.numberOfTurnsPlayed = other.numberOfTurnsPlayed;
+    this.racks = other.racks;
+    this.bag = other.bag;
+    this.isGameOver = other.isGameOver;
+  }
   get numberOfTilesInBag() {
     return this.bag.size;
   }
@@ -839,9 +847,9 @@ class HonorSystemTilesState extends EventTarget {
   }
   playTurns(...turnsToPlay) {
     for (const turn of turnsToPlay) {
+      this.playOneTurn(turn);
       if (this.isGameOver)
         return Promise.resolve(toTurnNumber(this.numberOfTurnsPlayed));
-      this.playOneTurn(turn);
     }
     return Promise.resolve(null);
   }
@@ -1022,6 +1030,16 @@ class Board extends EventTarget {
       throw new Error(`Board lacks a center square: ${rowStrings}`);
     this.centerSquare = centerSquare;
   }
+  copyFrom(other) {
+    this.squares.forEach((rowSquares, row) => {
+      rowSquares.forEach((square, col) => {
+        const otherSquare = other.squares[row][col];
+        square.tile = otherSquare.tile;
+        square.assignedLetter = otherSquare.assignedLetter;
+      });
+    });
+    this.scores = other.scores;
+  }
   checkWordPlacement(...placements) {
     const anyPlacement = placements[0];
     if (!anyPlacement)
@@ -1137,20 +1155,20 @@ class Board extends EventTarget {
       blanks
     };
   }
-  placeTiles(...tiles) {
-    for (const tile of tiles) {
-      const square = this.squares[tile.row]?.[tile.col];
+  placeTiles(...placements) {
+    for (const placement of placements) {
+      const square = this.squares[placement.row]?.[placement.col];
       if (!square)
-        throw new Error(`Invalid board coordinates: ${tile.row},${tile.col}.`);
+        throw new Error(`Invalid board coordinates: ${placement.row},${placement.col}.`);
       if (square.tile)
-        throw new Error(`Square ${tile.row}, ${tile.col} is occupied.`);
+        throw new Error(`Square ${placement.row}, ${placement.col} is occupied.`);
     }
-    for (const tile of tiles) {
-      const square = this.squares[tile.row]?.[tile.col];
+    for (const placement of placements) {
+      const square = this.squares[placement.row]?.[placement.col];
       if (square) {
-        square.tile = tile.tile;
-        square.assignedLetter = tile.assignedLetter;
-        this.dispatchEvent(new BoardEvent("tileplaced", { detail: { placement: tile } }));
+        square.tile = placement.tile;
+        square.assignedLetter = placement.assignedLetter;
+        this.dispatchEvent(new BoardEvent("tileplaced", { detail: { placement } }));
       }
     }
   }
@@ -1352,6 +1370,14 @@ class SharedState {
       }
     });
   }
+  copyFrom(other) {
+    this.board.copyFrom(other.board);
+    this.tilesState.copyFrom(other.tilesState);
+    this.nextTurnNumber = other.nextTurnNumber;
+    this.players.forEach((player, index) => {
+      player.name = other.players[index].name;
+    });
+  }
   get players() {
     return this.settings.players;
   }
@@ -1434,7 +1460,7 @@ class SharedState {
       await this.checkWords(...wordsToCheck);
     if (turnsToPlayNow.length === 0)
       return turnsToPlayNow;
-    console.log(`Turn validation success.`);
+    console.debug(`Turn validation success.`);
     for (const { playerId, score, placements } of boardChanges) {
       this.board.placeTiles(...placements);
       this.board.scores.set(playerId, (this.board.scores.get(playerId) ?? 0) + score);
@@ -1732,6 +1758,7 @@ class GameState extends EventTarget {
   history;
   pendingExtraParams;
   shared;
+  inPlayTurns = false;
   constructor(playerId, settings, keepAllHistory = false, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
@@ -1753,12 +1780,19 @@ class GameState extends EventTarget {
       const { placement } = evt.detail;
       const myTile = this.tilesHeld.find((p) => p.row === placement.row && p.col === placement.col);
       if (myTile && myTile.tile !== placement.tile) {
-        console.log(`My tile at ${placement.row},${placement.col} is displaced. Moving it to rack.`);
+        console.debug(`My tile at ${placement.row},${placement.col} is displaced. Moving it to rack.`);
         this.moveTile(myTile.row, myTile.col, "rack", 0);
       }
     });
     this.tilesState.addEventListener("tiledraw", this.tiledraw.bind(this));
     this.tilesState.addEventListener("tilereturn", this.tilereturn.bind(this));
+  }
+  copyFrom(other) {
+    this.shared.copyFrom(other.shared);
+    this.keepAllHistory = other.keepAllHistory;
+    this.tilesHeld.splice(0, this.tilesHeld.length, ...other.tilesHeld);
+    this.history.splice(0, this.history.length, ...other.history);
+    this.pendingExtraParams = other.pendingExtraParams;
   }
   async init() {
     const tiles = await this.tilesState.getTiles(this.playerId);
@@ -1817,6 +1851,7 @@ class GameState extends EventTarget {
   }
   tiledraw(evt) {
     if (evt.detail.playerId === this.playerId) {
+      console.debug(`I drew "${evt.detail.tile.letter}".`);
       const occupiedIndices = new Set(this.tilesHeld.filter((p) => p.row === "rack").map((p) => p.col));
       for (let col = 0;col < this.settings.rackCapacity; ++col) {
         if (!occupiedIndices.has(col)) {
@@ -1829,7 +1864,9 @@ class GameState extends EventTarget {
   }
   tilereturn(evt) {
     if (evt.detail.playerId === this.playerId) {
-      const index = this.tilesHeld.findIndex((p) => p.row === "exchange" && p.tile.equals(evt.detail.tile));
+      let index = this.tilesHeld.findIndex((p) => p.row === "exchange" && p.tile.equals(evt.detail.tile));
+      if (index === -1)
+        index = this.tilesHeld.findIndex((p) => p.tile.equals(evt.detail.tile));
       if (index === -1) {
         console.error(`Tile not found for exchange: ${JSON.stringify(evt.detail.tile)}`);
       } else {
@@ -1941,7 +1978,7 @@ class GameState extends EventTarget {
     const turn = new Turn(this.playerId, this.nextTurnNumber, { playTiles: placements });
     turn.extraParams = this.pendingExtraParams;
     this.pendingExtraParams = new URLSearchParams;
-    await this.playTurns(turn);
+    await this.playTurns([turn]);
   }
   async passOrExchange() {
     const placements = this.tilesHeld.map((p, index) => ({ p, index })).filter(({ p }) => p.row === "exchange");
@@ -1949,25 +1986,58 @@ class GameState extends EventTarget {
     const turn = new Turn(this.playerId, this.nextTurnNumber, { exchangeTileIndices });
     turn.extraParams = this.pendingExtraParams;
     this.pendingExtraParams = new URLSearchParams;
-    await this.playTurns(turn);
+    await this.playTurns([turn]);
   }
-  async playTurns(...turns) {
+  async playTurns(turns) {
     if (this.isGameOver) {
       throw new Error("Game Over.");
     }
-    turns = await this.shared.playTurns(...turns);
+    if (this.inPlayTurns)
+      throw new Error(`playTurns: recursion detected.`);
+    const json = this.toJSON();
+    const oldNextTurnNumber = this.nextTurnNumber;
+    let ok = false;
+    try {
+      this.inPlayTurns = true;
+      await this.doPlayTurns(turns);
+      ok = true;
+    } finally {
+      if (!ok) {
+        console.log("Rolling back game state.");
+        this.copyFrom(await GameState.fromJSON(json));
+      }
+      this.inPlayTurns = false;
+    }
+    if (this.nextTurnNumber !== oldNextTurnNumber) {
+      this.dispatchEvent(new GameEvent("turnchange"));
+    }
+    if (this.isGameOver) {
+      this.dispatchEvent(new GameEvent("gameover"));
+    }
+  }
+  async doPlayTurns(turns) {
+    let finalTurnNumber = null;
     for (const turn of turns) {
-      if (turn.playerId === this.playerId && "playTiles" in turn.move) {
-        for (const placement of turn.move.playTiles) {
-          const index = this.tilesHeld.findIndex((p) => p.row === placement.row && p.col === placement.col);
-          if (index === -1)
-            throw new Error(`Could not find tile to place: ${JSON.stringify(placement)}`);
-          this.tilesHeld.splice(index, 1);
+      for (const newTurn of await this.shared.playTurns(turn)) {
+        if (newTurn.playerId === this.playerId && "playTiles" in newTurn.move) {
+          console.debug(`Turn ${newTurn.turnNumber}: ${this.tilesHeld.map((p) => p.tile.letter)}`);
+          for (const placement of newTurn.move.playTiles) {
+            let index = this.tilesHeld.findIndex((p) => p.row === placement.row && p.col === placement.col && p.tile.equals(placement.tile));
+            if (index === -1)
+              index = this.tilesHeld.findIndex((p) => p.tile.equals(placement.tile));
+            if (index === -1)
+              index = this.tilesHeld.findIndex((p) => p.tile.isBlank);
+            if (index === -1)
+              throw new Error(`Could not find tile to place: ${JSON.stringify(placement)}`);
+            this.tilesHeld.splice(index, 1);
+          }
         }
+        finalTurnNumber = await this.tilesState.playTurns(turn);
+        if (finalTurnNumber !== null)
+          break;
       }
     }
-    const finalTurnNumber = await this.tilesState.playTurns(...turns);
-    const { wroteHistory } = updateTurnHistory({
+    updateTurnHistory({
       history: this.history,
       nextTurnNumber: this.nextTurnNumber,
       finalTurnNumber,
@@ -1988,7 +2058,6 @@ class GameState extends EventTarget {
       }
       console.log(`Transfering ${allTilesSum} to Player ${finalTurnPlayerId}.`);
       this.board.scores.set(finalTurnPlayerId, (this.board.scores.get(finalTurnPlayerId) ?? 0) + allTilesSum);
-      this.dispatchEvent(new GameEvent("gameover"));
     }
     if (!this.keepAllHistory) {
       const turnsToKeep = this.players.length - 1;
@@ -1996,8 +2065,6 @@ class GameState extends EventTarget {
         this.history.splice(0, this.history.length - turnsToKeep);
       }
     }
-    if (wroteHistory)
-      this.dispatchEvent(new GameEvent("turnchange"));
   }
   changePlayerName(playerId, name) {
     const playerIndex = this.players.findIndex((p) => p.id === playerId);
@@ -2030,7 +2097,7 @@ class GameState extends EventTarget {
     if (isNaN(turnNumber)) {
       throw new UrlError(`"tn" param is not a turn number: "${urlTurnNumberStr}"`);
     }
-    await this.playTurns(...this.shared.turnsFromParams(iterator, turnNumber));
+    await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
   static async fromParams(params, playerIdForTesting) {
     const { settings, playerId, turnParams } = await parseGameParams(params, playerIdForTesting);
