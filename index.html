@@ -1322,6 +1322,13 @@ async function checkWord(wordToCheck, dictionaryType, dictionarySettings) {
 }
 
 // game/shared_state.ts
+class UrlError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UrlError";
+  }
+}
+
 class SharedState {
   settings;
   gameId;
@@ -1329,13 +1336,15 @@ class SharedState {
   tilesState;
   nextTurnNumber;
   checkWords;
-  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), checkWords = makeDictionary(settings.dictionaryType, settings.dictionarySettings)) {
+  gameParams;
+  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), checkWords = makeDictionary(settings.dictionaryType, settings.dictionarySettings), gameParams = gameParamsFromSettings(settings)) {
     this.settings = settings;
     this.gameId = gameId;
     this.board = board;
     this.tilesState = tilesState;
     this.nextTurnNumber = nextTurnNumber2;
     this.checkWords = checkWords;
+    this.gameParams = gameParams;
     this.settings.players.forEach((player, index) => {
       const expected = String(index + 1);
       if (player.id !== expected) {
@@ -1348,6 +1357,25 @@ class SharedState {
   }
   get isGameOver() {
     return this.tilesState.isGameOver;
+  }
+  getPlayerForTurnNumber(turnNumber) {
+    return this.players[(fromTurnNumber(turnNumber) - 1) % this.players.length];
+  }
+  getTurnUrlParams(turnHistory) {
+    const entries = [["gid", fromGameId(this.gameId)]];
+    const firstHistoryTurnNumber = turnHistory[0]?.turnNumber;
+    if (firstHistoryTurnNumber === undefined || firstHistoryTurnNumber === toTurnNumber(1)) {
+      entries.push(...this.gameParams);
+    }
+    if (turnHistory.length) {
+      entries.push(["tn", String(firstHistoryTurnNumber)]);
+      turnHistory.forEach((turnData) => {
+        entries.push(...new URLSearchParams(turnData.paramsStr));
+      });
+    } else {
+      entries.push(["tn", "1"]);
+    }
+    return new URLSearchParams(entries);
   }
   async playTurns(...turns) {
     const seen = [];
@@ -1414,6 +1442,128 @@ class SharedState {
     this.nextTurnNumber = turnNumber;
     return turnsToPlayNow;
   }
+  *turnsFromParams(params, turnNumber) {
+    let wordLocationStr = null;
+    let blankTileIndicesStr = null;
+    let direction = null;
+    let wordPlayed = null;
+    let exchangeIndicesStr = null;
+    function* processPendingMoveIfAny() {
+      const playerId = this.getPlayerForTurnNumber(turnNumber).id;
+      if (wordPlayed && direction && wordLocationStr) {
+        if (exchangeIndicesStr) {
+          throw new UrlError(`Found both word and exchange data for turn ${turnNumber}.`);
+        }
+        const blankTileAssignments = [];
+        if (blankTileIndicesStr) {
+          blankTileIndicesStr.split(".").forEach((s) => {
+            const match2 = s.match(/^(\d+)$/);
+            if (!match2) {
+              throw new UrlError(`Invalid "bt" parameter component: "${s}"`);
+            }
+            const index = parseInt(match2[1]);
+            if (index in blankTileAssignments) {
+              throw new UrlError(`Duplicate blank tile assignment index: bt=${blankTileIndicesStr}`);
+            }
+            const assignedLetter = wordPlayed[index];
+            if (!assignedLetter) {
+              throw new UrlError(`Blank tile assignment index out of range: no "${wordPlayed}"[${index}].`);
+            }
+            blankTileAssignments[index] = assignedLetter;
+          });
+        }
+        const match = wordLocationStr.match(/^(\d+)\.(\d+)$/);
+        if (!match) {
+          throw new UrlError(`Invalid "wl" parameter: "${wordLocationStr}"`);
+        }
+        let row = parseInt(match[1]);
+        let col = parseInt(match[2]);
+        const placements = [];
+        wordPlayed.split("").map((letter, letterIndex) => {
+          const square = this.board.squares[row]?.[col];
+          if (!square)
+            throw new UrlError(`Attempted to play a word out of bounds: ${row},${col}.`);
+          if (!square.tile) {
+            const assignedLetter = blankTileAssignments[letterIndex] ?? "";
+            if (assignedLetter) {
+              placements.push({ tile: new Tile({ letter: "", value: 0 }), row, col, assignedLetter });
+            } else {
+              const value = this.settings.letterValues[letter];
+              if (value === undefined)
+                throw new UrlError(`Attempt to play an invalid letter: "${letter}"`);
+              placements.push({ tile: new Tile({ letter, value }), row, col });
+            }
+          } else if (square.letter !== letter) {
+            throw new UrlError(`Word requires "${letter}" at ${row},${col}, but "${square.letter}" is there.`);
+          }
+          if (direction === "wv") {
+            row += 1;
+          } else {
+            col += 1;
+          }
+        });
+        if (blankTileAssignments.length > wordPlayed.length) {
+          throw new UrlError(`"bt" parameter has index ${blankTileAssignments.length - 1} out of range 0-${wordPlayed.length - 1}.`);
+        }
+        yield new Turn(playerId, turnNumber, { playTiles: placements });
+      } else if (exchangeIndicesStr != null) {
+        if (wordPlayed || direction || wordLocationStr || blankTileIndicesStr) {
+          throw new UrlError(`Incomplete data for turn ${turnNumber}: wl=${wordLocationStr} ${direction}=${wordPlayed} bt=${blankTileIndicesStr}`);
+        }
+        const exchangeIndexStrs = exchangeIndicesStr ? exchangeIndicesStr.split(".") : [];
+        const numberOfTilesInRack = this.tilesState.countTiles(playerId);
+        const exchangeTileIndices = [];
+        exchangeIndexStrs.forEach((s) => {
+          const index = parseInt(s);
+          if (isNaN(index) || index < 0 || index >= numberOfTilesInRack) {
+            throw new UrlError(`Invalid exchange tile index: "${s}"`);
+          }
+          exchangeTileIndices.push(index);
+        });
+        yield new Turn(playerId, turnNumber, { exchangeTileIndices });
+      } else {
+        return;
+      }
+      turnNumber = nextTurnNumber(turnNumber);
+      wordLocationStr = null;
+      blankTileIndicesStr = null;
+      direction = null;
+      wordPlayed = null;
+      exchangeIndicesStr = null;
+    }
+    for (const [key, value] of params) {
+      const pnMatch = key.match(/^p(\d+)n$/);
+      if (pnMatch) {
+        const playerIndex = parseInt(pnMatch[1]) - 1;
+        const player = this.players[playerIndex];
+        if (player) {
+          player.name = value;
+        } else {
+          throw new UrlError(`Invalid turn URL: Player ID "${pnMatch[1]}" should be in 1-${this.players.length}.`);
+        }
+      } else if (key === "wl") {
+        yield* processPendingMoveIfAny.call(this);
+        wordLocationStr = value;
+      } else if (key === "ex") {
+        yield* processPendingMoveIfAny.call(this);
+        exchangeIndicesStr = value;
+      } else if (key === "bt") {
+        if (blankTileIndicesStr) {
+          throw new UrlError(`Duplicate "bt" parameter for turn ${turnNumber}.`);
+        }
+        blankTileIndicesStr = value;
+      } else if (key === "wv" || key === "wh") {
+        if (direction) {
+          throw new UrlError(`Duplicate word parameters for turn ${turnNumber}.`);
+        }
+        direction = key;
+        wordPlayed = value;
+      } else {
+        throw new UrlError(`Unrecognized parameter name: "${key}"`);
+      }
+    }
+    yield* processPendingMoveIfAny.call(this);
+  }
   toJSON() {
     return {
       gameId: this.gameId,
@@ -1445,6 +1595,114 @@ class SharedState {
     return new SharedState(settings, json.gameId, Board.fromJSON(json.board), rehydrateTilesState(settings.tileSystemType, json.tilesState), toTurnNumber(json.nextTurnNumber));
   }
 }
+function gameParamsFromSettings(settings) {
+  const params = new URLSearchParams;
+  const defaults = new Settings;
+  params.set("v", settings.version);
+  if (!playersEqual(settings.players, defaults.players)) {
+    settings.players.forEach((p, index) => {
+      params.set(`p${index + 1}n`, p.name);
+    });
+  }
+  if (!arraysEqual(settings.boardLayout, defaults.boardLayout, false)) {
+    params.set("board", settings.boardLayout.join("-"));
+  }
+  if (settings.bingoBonus !== defaults.bingoBonus) {
+    params.set("bingo", String(settings.bingoBonus));
+  }
+  if (!(objectsEqual(settings.letterCounts, defaults.letterCounts) && objectsEqual(settings.letterValues, defaults.letterValues))) {
+    const bagParam = Object.entries(settings.letterCounts).map(([letter, count]) => `${letter}-${count}-${settings.letterValues[letter] ?? 0}`).join(".");
+    params.set("bag", bagParam);
+  }
+  if (settings.rackCapacity !== defaults.rackCapacity) {
+    params.set("racksize", String(settings.rackCapacity));
+  }
+  if (settings.tileSystemType === "honor") {
+    params.set("seed", settings.tileSystemSettings.seed);
+  }
+  if (settings.dictionaryType !== defaults.dictionaryType) {
+    params.set("dt", settings.dictionaryType);
+  }
+  if (typeof settings.dictionarySettings === "string") {
+    params.set("ds", settings.dictionarySettings);
+  }
+  return params;
+}
+async function parseGameParams(allParams, playerId) {
+  const gameParams = new URLSearchParams;
+  const turnParams = new URLSearchParams;
+  for (const [name, value] of allParams) {
+    if (turnParams.size || name === "tn") {
+      turnParams.append(name, value);
+    } else {
+      gameParams.append(name, value);
+    }
+  }
+  const settings = new Settings;
+  const vParam = gameParams.get("v");
+  if (vParam && vParam !== settings.version) {
+    throw new Error(`Protocol version not supported: ${vParam}`);
+  }
+  const gidParam = gameParams.get("gid");
+  if (gidParam)
+    settings.gameId = toGameId(gidParam);
+  const newPlayers = [];
+  for (let playerNumber = 1;; ++playerNumber) {
+    const pnParam = gameParams.get(`p${playerNumber}n`);
+    if (!pnParam)
+      break;
+    newPlayers.push(new Player({ id: String(playerNumber), name: pnParam.slice(0, settings.maxPlayerNameLength) }));
+  }
+  if (newPlayers.length)
+    settings.players = newPlayers;
+  const bagParam = gameParams.get("bag");
+  if (bagParam) {
+    const letterCounts = {};
+    const letterValues = {};
+    bagParam.split(".").map((letterCountAndValue) => {
+      if (!letterCountAndValue.match(/^(.*)-(\d+)-(\d+)$/)) {
+        throw new Error(`Invalid letter configuration in URL: ${letterCountAndValue}`);
+      }
+      const parts = letterCountAndValue.split("-");
+      letterCounts[parts[0]] = parseInt(parts[1]);
+      letterValues[parts[0]] = parseInt(parts[2]);
+    });
+    settings.letterCounts = letterCounts;
+    settings.letterValues = letterValues;
+  }
+  const boardParam = gameParams.get("board");
+  if (boardParam)
+    settings.boardLayout = boardParam.split("-");
+  const bingoParam = gameParams.get("bingo");
+  if (bingoParam)
+    settings.bingoBonus = parseInt(bingoParam);
+  const racksizeParam = gameParams.get("racksize");
+  if (racksizeParam)
+    settings.rackCapacity = parseInt(racksizeParam);
+  const seedParam = gameParams.get("seed");
+  if (!seedParam)
+    throw new Error("No random seed in URL.");
+  settings.tileSystemSettings = { seed: seedParam };
+  const dtParam = gameParams.get("dt");
+  if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
+    settings.dictionaryType = dtParam;
+  } else if (dtParam) {
+    throw new Error(`Unknown dictionary type: "${dtParam}".`);
+  }
+  const dsParam = gameParams.get("ds");
+  if (dsParam)
+    settings.dictionarySettings = dsParam;
+  else if (settings.dictionaryType === "custom") {
+    throw new Error("Custom dictionary requires a URL.");
+  }
+  if (!playerId) {
+    const urlTurnNumber = parseInt(turnParams.get("tn")) || 1;
+    const turnNumber = urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length;
+    playerId = settings.players[(turnNumber - 1) % settings.players.length].id;
+    console.log(`Joining as Player ${playerId}.`);
+  }
+  return { settings, playerId, turnParams };
+}
 function makeTilesState(settings) {
   if (settings.tileSystemType === "honor") {
     return new HonorSystemTilesState(settings.players, settings.tileSystemSettings, makeTiles(settings), settings.rackCapacity);
@@ -1456,6 +1714,15 @@ function rehydrateTilesState(tileSystemType, tilesStateJson) {
     return HonorSystemTilesState.fromJSON(tilesStateJson);
   throw new TypeError(`Unknown tileSystemType: ${tileSystemType}`);
 }
+function playersEqual(ps1, ps2) {
+  if (ps1.length !== ps2.length)
+    return false;
+  for (const index in ps1) {
+    if (!ps1[index].equals(ps2[index]))
+      return false;
+  }
+  return true;
+}
 
 // game/game_state.ts
 class GameState extends EventTarget {
@@ -1465,7 +1732,6 @@ class GameState extends EventTarget {
   history;
   pendingExtraParams;
   shared;
-  gameParams;
   constructor(playerId, settings, keepAllHistory = false, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
@@ -1480,7 +1746,6 @@ class GameState extends EventTarget {
       shared = new SharedState(settings);
     }
     this.shared = shared;
-    this.gameParams = this.getGameParams();
     if (!this.shared.settings.players.some((p) => p.id === playerId)) {
       throw new Error(`Player ID "${playerId}" is not listed in settings.`);
     }
@@ -1540,21 +1805,7 @@ class GameState extends EventTarget {
     return await this.tilesState.getTiles(playerId);
   }
   get turnUrlParams() {
-    const entries = [["gid", fromGameId(this.gameId)]];
-    const turnHistory = this.history.slice(1 - this.players.length);
-    const firstHistoryTurnNumber = turnHistory[0]?.turnNumber;
-    if (firstHistoryTurnNumber === undefined || firstHistoryTurnNumber === toTurnNumber(1)) {
-      entries.push(...this.gameParams);
-    }
-    if (turnHistory.length) {
-      entries.push(["tn", String(firstHistoryTurnNumber)]);
-      turnHistory.forEach((turnData) => {
-        entries.push(...new URLSearchParams(turnData.paramsStr));
-      });
-    } else {
-      entries.push(["tn", "1"]);
-    }
-    return new URLSearchParams(entries);
+    return this.shared.getTurnUrlParams(this.history.slice(1 - this.players.length));
   }
   get playerWhoseTurnItIs() {
     if (this.isGameOver)
@@ -1562,7 +1813,7 @@ class GameState extends EventTarget {
     return this.getPlayerForTurnNumber(this.nextTurnNumber);
   }
   getPlayerForTurnNumber(turnNumber) {
-    return this.players[(fromTurnNumber(turnNumber) - 1) % this.players.length];
+    return this.shared.getPlayerForTurnNumber(turnNumber);
   }
   tiledraw(evt) {
     if (evt.detail.playerId === this.playerId) {
@@ -1775,235 +2026,14 @@ class GameState extends EventTarget {
       console.info("applyTurnParams: no turn number found.");
       return;
     }
-    const turns = [];
-    let urlTurnNumber = parseInt(urlTurnNumberStr);
-    let wordLocationStr = null;
-    let blankTileIndicesStr = null;
-    let direction = null;
-    let wordPlayed = null;
-    let exchangeIndicesStr = null;
-    const processPendingMoveIfAny = () => {
-      const playerId = this.getPlayerForTurnNumber(toTurnNumber(urlTurnNumber)).id;
-      if (wordPlayed && direction && wordLocationStr) {
-        if (exchangeIndicesStr) {
-          throw new Error(`URL contains both word and exchange data for turn ${urlTurnNumber}`);
-        }
-        const blankTileAssignments = [];
-        if (blankTileIndicesStr) {
-          blankTileIndicesStr.split(".").forEach((s) => {
-            const match2 = s.match(/^(\d+)$/);
-            if (!match2) {
-              throw new Error(`Invalid "bt" URL parameter component: ${s}`);
-            }
-            const index = parseInt(match2[1]);
-            if (index in blankTileAssignments) {
-              throw new Error(`Duplicate blank tile assignment index: bt=${blankTileIndicesStr}`);
-            }
-            const assignedLetter = wordPlayed[index];
-            if (!assignedLetter) {
-              throw new RangeError(`Blank tile assignment index ${index} out of range: no "${wordPlayed}"[${index}].`);
-            }
-            blankTileAssignments[index] = assignedLetter;
-          });
-        }
-        const match = wordLocationStr.match(/^(\d+)\.(\d+)$/);
-        if (!match) {
-          throw new Error(`Invalid wl parameter in URL: ${wordLocationStr}`);
-        }
-        let row = parseInt(match[1]);
-        let col = parseInt(match[2]);
-        const placements = [];
-        wordPlayed.split("").map((letter, letterIndex) => {
-          const square = this.board.squares[row]?.[col];
-          if (!square)
-            throw new RangeError(`Attempted to play a word out of bounds: ${row},${col}.`);
-          if (!square.tile) {
-            const assignedLetter = blankTileAssignments[letterIndex] ?? "";
-            if (assignedLetter) {
-              placements.push({ tile: new Tile({ letter: "", value: 0 }), row, col, assignedLetter });
-            } else {
-              const value = this.settings.letterValues[letter];
-              if (value === undefined)
-                throw new Error(`Attempt to play an invalid letter: "${letter}"`);
-              placements.push({ tile: new Tile({ letter, value }), row, col });
-            }
-          } else if (square.letter !== letter) {
-            throw new Error(`Attempt word requires "${letter}" at ${row},${col}, but "${square.letter}" is there.`);
-          }
-          if (direction === "wv") {
-            row += 1;
-          } else {
-            col += 1;
-          }
-        });
-        if (blankTileAssignments.length > wordPlayed.length) {
-          throw new RangeError(`"bt" URL parameter has index ${blankTileAssignments.length - 1} out of range 0-${wordPlayed.length - 1}`);
-        }
-        turns.push(new Turn(playerId, toTurnNumber(urlTurnNumber), { playTiles: placements }));
-      } else if (exchangeIndicesStr != null) {
-        if (wordPlayed || direction || wordLocationStr || blankTileIndicesStr) {
-          throw new Error(`Incomplete URL data for turn ${urlTurnNumber}: wl=${wordLocationStr} ${direction}=${wordPlayed} bt=${blankTileIndicesStr}`);
-        }
-        const exchangeIndexStrs = exchangeIndicesStr ? exchangeIndicesStr.split(".") : [];
-        const numberOfTilesInRack = this.tilesState.countTiles(playerId);
-        const exchangeTileIndices = exchangeIndexStrs.map((s) => parseInt(s, 10));
-        exchangeTileIndices.forEach((index) => {
-          if (isNaN(index) || index < 0 || index >= numberOfTilesInRack) {
-            throw new RangeError(`Exchange tile index ${index} in URL is out of range 0-${numberOfTilesInRack - 1}`);
-          }
-        });
-        turns.push(new Turn(playerId, toTurnNumber(urlTurnNumber), { exchangeTileIndices }));
-      } else {
-        return;
-      }
-      urlTurnNumber++;
-      wordLocationStr = null;
-      blankTileIndicesStr = null;
-      direction = null;
-      wordPlayed = null;
-      exchangeIndicesStr = null;
-    };
-    for (const [key, value] of iterator) {
-      const pnMatch = key.match(/^p(\d+)n$/);
-      if (pnMatch) {
-        const playerIndex = parseInt(pnMatch[1]) - 1;
-        const player = this.players[playerIndex];
-        if (player) {
-          player.name = value;
-        } else {
-          throw new Error(`Invalid turn URL: Player ID "${pnMatch[1]}" should be in 1-${this.players.length}.`);
-        }
-      } else if (key === "wl") {
-        processPendingMoveIfAny();
-        wordLocationStr = value;
-      } else if (key === "ex") {
-        processPendingMoveIfAny();
-        exchangeIndicesStr = value;
-      } else if (key === "bt") {
-        if (blankTileIndicesStr) {
-          throw new Error(`Duplicate "bt" parameter in URL data for turn ${urlTurnNumber}`);
-        }
-        blankTileIndicesStr = value;
-      } else if (key === "wv" || key === "wh") {
-        if (direction) {
-          throw new Error(`Duplicate word parameters in URL data for turn ${urlTurnNumber}`);
-        }
-        direction = key;
-        wordPlayed = value;
-      } else {
-        throw new Error(`Invalid turn URL: Unrecognized parameter name: "${key}"`);
-      }
+    const turnNumber = toTurnNumber(parseInt(urlTurnNumberStr));
+    if (isNaN(turnNumber)) {
+      throw new UrlError(`"tn" param is not a turn number: "${urlTurnNumberStr}"`);
     }
-    processPendingMoveIfAny();
-    await this.playTurns(...turns);
+    await this.playTurns(...this.shared.turnsFromParams(iterator, turnNumber));
   }
-  getGameParams() {
-    const params = new URLSearchParams;
-    const defaults = new Settings;
-    params.set("v", this.settings.version);
-    if (!playersEqual(this.settings.players, defaults.players)) {
-      this.settings.players.forEach((p, index) => {
-        params.set(`p${index + 1}n`, p.name);
-      });
-    }
-    if (!arraysEqual(this.settings.boardLayout, defaults.boardLayout, false)) {
-      params.set("board", this.settings.boardLayout.join("-"));
-    }
-    if (this.settings.bingoBonus !== defaults.bingoBonus) {
-      params.set("bingo", String(this.settings.bingoBonus));
-    }
-    if (!(objectsEqual(this.settings.letterCounts, defaults.letterCounts) && objectsEqual(this.settings.letterValues, defaults.letterValues))) {
-      const bagParam = Object.entries(this.settings.letterCounts).map(([letter, count]) => `${letter}-${count}-${this.settings.letterValues[letter] ?? 0}`).join(".");
-      params.set("bag", bagParam);
-    }
-    if (this.settings.rackCapacity !== defaults.rackCapacity) {
-      params.set("racksize", String(this.settings.rackCapacity));
-    }
-    if (this.settings.tileSystemType === "honor") {
-      params.set("seed", this.settings.tileSystemSettings.seed);
-    }
-    if (this.settings.dictionaryType !== defaults.dictionaryType) {
-      params.set("dt", this.settings.dictionaryType);
-    }
-    if (typeof this.settings.dictionarySettings === "string") {
-      params.set("ds", this.settings.dictionarySettings);
-    }
-    return params;
-  }
-  static async fromParams(allParams, playerId) {
-    const gameParams = new URLSearchParams;
-    const turnParams = new URLSearchParams;
-    for (const [name, value] of allParams) {
-      if (turnParams.size || name === "tn") {
-        turnParams.append(name, value);
-      } else {
-        gameParams.append(name, value);
-      }
-    }
-    const settings = new Settings;
-    const vParam = gameParams.get("v");
-    if (vParam && vParam !== settings.version) {
-      throw new Error(`Protocol version not supported: ${vParam}`);
-    }
-    const gidParam = gameParams.get("gid");
-    if (gidParam)
-      settings.gameId = toGameId(gidParam);
-    const newPlayers = [];
-    for (let playerNumber = 1;; ++playerNumber) {
-      const pnParam = gameParams.get(`p${playerNumber}n`);
-      if (!pnParam)
-        break;
-      newPlayers.push(new Player({ id: String(playerNumber), name: pnParam.slice(0, settings.maxPlayerNameLength) }));
-    }
-    if (newPlayers.length)
-      settings.players = newPlayers;
-    const bagParam = gameParams.get("bag");
-    if (bagParam) {
-      const letterCounts = {};
-      const letterValues = {};
-      const lettersCountsAndValues = bagParam.split(".").map((letterCountAndValue) => {
-        if (!letterCountAndValue.match(/^(.*)-(\d+)-(\d+)$/)) {
-          throw new Error(`Invalid letter configuration in URL: ${letterCountAndValue}`);
-        }
-        const parts = letterCountAndValue.split("-");
-        letterCounts[parts[0]] = parseInt(parts[1]);
-        letterValues[parts[0]] = parseInt(parts[2]);
-      });
-      settings.letterCounts = letterCounts;
-      settings.letterValues = letterValues;
-    }
-    const boardParam = gameParams.get("board");
-    if (boardParam)
-      settings.boardLayout = boardParam.split("-");
-    const bingoParam = gameParams.get("bingo");
-    if (bingoParam)
-      settings.bingoBonus = parseInt(bingoParam);
-    const racksizeParam = gameParams.get("racksize");
-    if (racksizeParam)
-      settings.rackCapacity = parseInt(racksizeParam);
-    const tileSystemType = settings.tileSystemType;
-    const seedParam = gameParams.get("seed");
-    if (!seedParam)
-      throw new Error("No random seed in URL.");
-    settings.tileSystemSettings = { seed: seedParam };
-    const dtParam = gameParams.get("dt");
-    if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
-      settings.dictionaryType = dtParam;
-    } else if (dtParam) {
-      throw new Error(`Unknown dictionary type: "${dtParam}".`);
-    }
-    const dsParam = gameParams.get("ds");
-    if (dsParam)
-      settings.dictionarySettings = dsParam;
-    else if (settings.dictionaryType === "custom") {
-      throw new Error("Custom dictionary requires a URL.");
-    }
-    if (!playerId) {
-      const urlTurnNumber = parseInt(turnParams.get("tn")) || 1;
-      const turnNumber = urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length;
-      playerId = settings.players[(turnNumber - 1) % settings.players.length].id;
-      console.log(`Joining as Player ${playerId}.`);
-    }
+  static async fromParams(params, playerIdForTesting) {
+    const { settings, playerId, turnParams } = await parseGameParams(params, playerIdForTesting);
     const gameState = new GameState(playerId, settings);
     await gameState.init();
     await gameState.applyTurnParams(turnParams);
@@ -2089,15 +2119,6 @@ class GameState extends EventTarget {
     await gameState.init();
     return gameState;
   }
-}
-function playersEqual(ps1, ps2) {
-  if (ps1.length !== ps2.length)
-    return false;
-  for (const index in ps1) {
-    if (!ps1[index].equals(ps2[index]))
-      return false;
-  }
-  return true;
 }
 
 // view/dialog.ts
@@ -2275,10 +2296,8 @@ class View {
   gameSetup;
   dropTarget = null;
   doc;
-  browser;
   constructor(gameState, browser) {
     this.gameState = gameState;
-    this.browser = browser;
     this.doc = browser.getDocument();
     this.gameContainer = this.doc.getElementById("game-container");
     this.boardContainer = this.gameContainer.querySelector("#board-container");
