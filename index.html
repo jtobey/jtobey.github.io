@@ -608,7 +608,6 @@ function updateTurnHistory({
   finalTurnNumber,
   turns
 }) {
-  let wroteHistory = false;
   for (const turn of turns) {
     if (fromTurnNumber(turn.turnNumber) >= nextTurnNumber2) {
       break;
@@ -637,11 +636,9 @@ function updateTurnHistory({
       addExtra();
     }
     history.push({ turnNumber: turn.turnNumber, paramsStr: String(params) });
-    wroteHistory = true;
     if (turn.turnNumber === finalTurnNumber)
       break;
   }
-  return { wroteHistory };
 }
 
 // game/tile.ts
@@ -1385,7 +1382,7 @@ class SharedState {
     return this.tilesState.isGameOver;
   }
   getPlayerForTurnNumber(turnNumber) {
-    return this.players[(fromTurnNumber(turnNumber) - 1) % this.players.length];
+    return getPlayerForTurnNumber(this.players, turnNumber);
   }
   getTurnUrlParams(turnHistory) {
     const entries = [["gid", fromGameId(this.gameId)]];
@@ -1423,7 +1420,7 @@ class SharedState {
         console.warn(`Ignoring out-of-order turn number ${turn.turnNumber}; expected ${turnNumber}.`);
         break;
       }
-      const playerId = this.players[(fromTurnNumber(turnNumber) - 1) % this.players.length].id;
+      const playerId = this.getPlayerForTurnNumber(turnNumber).id;
       if (turn.playerId !== playerId) {
         throw new Error(`Turn number ${turn.turnNumber} belongs to player "${playerId}", not "${turn.playerId}".`);
       }
@@ -1654,7 +1651,7 @@ function gameParamsFromSettings(settings) {
   }
   return params;
 }
-async function parseGameParams(allParams, playerId) {
+async function parseGameParams(allParams) {
   const gameParams = new URLSearchParams;
   const turnParams = new URLSearchParams;
   for (const [name, value] of allParams) {
@@ -1721,10 +1718,11 @@ async function parseGameParams(allParams, playerId) {
   else if (settings.dictionaryType === "custom") {
     throw new Error("Custom dictionary requires a URL.");
   }
+  let playerId = gameParams.get("pid") ?? undefined;
   if (!playerId) {
     const urlTurnNumber = parseInt(turnParams.get("tn")) || 1;
-    const turnNumber = urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length;
-    playerId = settings.players[(turnNumber - 1) % settings.players.length].id;
+    const turnNumber = toTurnNumber(urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length);
+    playerId = getPlayerForTurnNumber(settings.players, turnNumber).id;
     console.log(`Joining as Player ${playerId}.`);
   }
   return { settings, playerId, turnParams };
@@ -1749,6 +1747,9 @@ function playersEqual(ps1, ps2) {
   }
   return true;
 }
+function getPlayerForTurnNumber(players, turnNumber) {
+  return players[(fromTurnNumber(turnNumber) - 1) % players.length];
+}
 
 // game/game_state.ts
 class GameState extends EventTarget {
@@ -1759,7 +1760,7 @@ class GameState extends EventTarget {
   pendingExtraParams;
   shared;
   inPlayTurns = false;
-  constructor(playerId, settings, keepAllHistory = false, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
+  constructor(playerId, settings, keepAllHistory = true, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
     this.keepAllHistory = keepAllHistory;
@@ -1840,6 +1841,9 @@ class GameState extends EventTarget {
   }
   get turnUrlParams() {
     return this.shared.getTurnUrlParams(this.history.slice(1 - this.players.length));
+  }
+  getHistoryUrlParamsForPlayer(playerId) {
+    return new URLSearchParams([["pid", playerId], ...this.shared.getTurnUrlParams(this.history)]);
   }
   get playerWhoseTurnItIs() {
     if (this.isGameOver)
@@ -2016,11 +2020,11 @@ class GameState extends EventTarget {
     }
   }
   async doPlayTurns(turns) {
+    const newTurns = [];
     let finalTurnNumber = null;
     for (const turn of turns) {
       for (const newTurn of await this.shared.playTurns(turn)) {
         if (newTurn.playerId === this.playerId && "playTiles" in newTurn.move) {
-          console.debug(`Turn ${newTurn.turnNumber}: ${this.tilesHeld.map((p) => p.tile.letter)}`);
           for (const placement of newTurn.move.playTiles) {
             let index = this.tilesHeld.findIndex((p) => p.row === placement.row && p.col === placement.col && p.tile.equals(placement.tile));
             if (index === -1)
@@ -2033,6 +2037,7 @@ class GameState extends EventTarget {
           }
         }
         finalTurnNumber = await this.tilesState.playTurns(turn);
+        newTurns.push(turn);
         if (finalTurnNumber !== null)
           break;
       }
@@ -2041,7 +2046,7 @@ class GameState extends EventTarget {
       history: this.history,
       nextTurnNumber: this.nextTurnNumber,
       finalTurnNumber,
-      turns
+      turns: newTurns
     });
     if (finalTurnNumber !== null) {
       const finalTurnPlayerId = this.getPlayerForTurnNumber(finalTurnNumber).id;
@@ -2099,8 +2104,8 @@ class GameState extends EventTarget {
     }
     await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
-  static async fromParams(params, playerIdForTesting) {
-    const { settings, playerId, turnParams } = await parseGameParams(params, playerIdForTesting);
+  static async fromParams(params) {
+    const { settings, playerId, turnParams } = await parseGameParams(params);
     const gameState = new GameState(playerId, settings);
     await gameState.init();
     await gameState.applyTurnParams(turnParams);
@@ -2316,6 +2321,15 @@ class GameSetup {
         this._updatePlayerList(currentPlayers);
       };
       playerEntry.appendChild(removeButton);
+      if (this.gameState.keepAllHistory && player.id !== undefined) {
+        const historyParams = this.gameState.getHistoryUrlParamsForPlayer(player.id);
+        const replayLink = this.doc.createElement("a");
+        const gameUrl = this.browser.getHref().replace(this.browser.getHash(), "");
+        replayLink.href = gameUrl + "#" + historyParams;
+        const linkText = this.doc.createTextNode("join");
+        replayLink.appendChild(linkText);
+        playerEntry.appendChild(replayLink);
+      }
       this.playerList.appendChild(playerEntry);
     });
   }
@@ -2329,7 +2343,7 @@ class GameSetup {
     }
   }
   _populateSettingsDialog() {
-    this._updatePlayerList(this.gameState.players.map((p) => ({ name: p.name })));
+    this._updatePlayerList(this.gameState.players);
     this.dictionaryType.value = this.gameState.settings.dictionaryType;
     this._handleDictChange();
     if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
@@ -3051,7 +3065,10 @@ class App {
   saveGameState() {
     const gid = this.gameState.gameId;
     if (gid) {
-      this.browser.setLocalStorageItem(`sharewords_${gid}`, JSON.stringify(this.gameState.toJSON()));
+      this.browser.setLocalStorageItem(`sharewords_${gid}`, JSON.stringify({
+        game: this.gameState.toJSON(),
+        ts: Date.now()
+      }));
     }
   }
   async init() {
@@ -3070,7 +3087,7 @@ class App {
       const savedGame = gidParam && this.browser.getLocalStorageItem(`sharewords_${gidParam}`);
       if (savedGame) {
         console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
-        this.gameState = await GameState.fromJSON(JSON.parse(savedGame));
+        this.gameState = await GameState.fromJSON(JSON.parse(savedGame).game);
         await this.gameState.applyTurnParams(params);
       } else {
         if (!params.get("seed"))
