@@ -413,7 +413,16 @@ function fromGameId(gameId) {
   return gameId;
 }
 function makeGameId() {
-  return `game-${Date.now()}.${Math.floor(1e9 * Math.random())}`;
+  const now = Date.now();
+  const array = new Uint8Array([
+    now >> 24,
+    now >> 16,
+    now >> 8,
+    now,
+    Math.random() * 256,
+    Math.random() * 256
+  ]);
+  return btoa(String.fromCharCode(...array)).replace(/\+/g, "-").replace(/\//g, "_");
 }
 var DEFAULT_PLAYER_LIST = [
   new Player({ id: "1" }),
