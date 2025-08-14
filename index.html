@@ -412,17 +412,16 @@ function toGameId(gameIdStr) {
 function fromGameId(gameId) {
   return gameId;
 }
-function makeGameId() {
-  const now = Date.now();
-  const array = new Uint8Array([
-    now >> 24,
-    now >> 16,
-    now >> 8,
-    now,
-    Math.random() * 256,
-    Math.random() * 256
-  ]);
-  return btoa(String.fromCharCode(...array)).replace(/\+/g, "-").replace(/\//g, "_");
+function makeGameId(now = Date.now()) {
+  const ALPHABET = "123456789BCDFGHJKLMNPQRSTVWXYZbcdfghjkmnpqrstvwxyz";
+  const base = BigInt(ALPHABET.length);
+  let n = BigInt(Math.floor(now));
+  let id = "";
+  while (id.length < 7) {
+    id = ALPHABET[Number(n % base)] + id;
+    n /= base;
+  }
+  return id;
 }
 var DEFAULT_PLAYER_LIST = [
   new Player({ id: "1" }),
@@ -491,11 +490,11 @@ var DEFAULT_BOARD_LAYOUT = [
   "..D.....t...t..",
   "d..D...t.....t.",
   "....D.t...D....",
-  ".D...d.d.....t.",
+  ".D...t.d.....t.",
   "T...d...d...t..",
   "...d.t...d.t...",
   "..d...t...t...T",
-  ".d.....t.t...D.",
+  ".d.....t.d...D.",
   "....D...d.D....",
   ".d.....d...D..d",
   "..d...d.....D..",
@@ -1816,7 +1815,6 @@ class GameState extends EventTarget {
     this.tilesHeld.forEach((p) => {
       this.dispatchEvent(new TileEvent("tilemove", { detail: { placement: p } }));
     });
-    return this;
   }
   get gameId() {
     return this.shared.gameId;
@@ -2142,7 +2140,7 @@ class GameState extends EventTarget {
       pendingExtraParams: this.pendingExtraParams.toString()
     };
   }
-  static async fromJSON(json) {
+  static fromJSON(json) {
     function fail(msg) {
       throw new TypeError(`${msg} in GameState serialization: ${JSON.stringify(json)}`);
     }
@@ -2198,7 +2196,6 @@ class GameState extends EventTarget {
       return { turnNumber: toTurnNumber(turnDataJson.turnNumber), paramsStr: turnDataJson.params };
     });
     const gameState = new GameState(json.playerId, undefined, json.keepAllHistory, SharedState.fromJSON(json.shared), tilesHeld, history, new URLSearchParams(json.pendingExtraParams));
-    await gameState.init();
     return gameState;
   }
 }
@@ -3058,6 +3055,10 @@ class DomBrowser {
 }
 
 // app.ts
+function makeStorageKey(gameId) {
+  return "sharewords_" + gameId;
+}
+
 class App {
   browser;
   gameState;
@@ -3075,10 +3076,8 @@ class App {
   saveGameState() {
     const gid = this.gameState.gameId;
     if (gid) {
-      this.browser.setLocalStorageItem(`sharewords_${gid}`, JSON.stringify({
-        game: this.gameState.toJSON(),
-        ts: Date.now()
-      }));
+      const game = this.gameState.toJSON();
+      this.browser.setLocalStorageItem(makeStorageKey(gid), JSON.stringify({ game, ts: Date.now() }));
     }
   }
   async init() {
@@ -3094,10 +3093,10 @@ class App {
         }
         return;
       }
-      const savedGame = gidParam && this.browser.getLocalStorageItem(`sharewords_${gidParam}`);
+      const savedGame = gidParam && this.browser.getLocalStorageItem(makeStorageKey(gidParam));
       if (savedGame) {
         console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
-        this.gameState = await GameState.fromJSON(JSON.parse(savedGame).game);
+        this.gameState = GameState.fromJSON(JSON.parse(savedGame).game);
         await this.gameState.applyTurnParams(params);
       } else {
         if (!params.get("seed"))
