@@ -13,7 +13,7 @@
 #board-container {
   overflow: hidden;
   position: relative;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   border: 1px solid #ccc;
   width: 601px;
   height: 601px;
@@ -2369,6 +2369,33 @@ class GameSetup {
       this.settingsDialog.hidden = true;
     }
   }
+  debugContainer;
+  initDebugDisplay(bufferedLogs) {
+    const buttons = this.settingsDialog.querySelector(".buttons");
+    if (!buttons)
+      return;
+    this.debugContainer = this.doc.createElement("div");
+    this.debugContainer.id = "debug-console";
+    this.debugContainer.style.height = "150px";
+    this.debugContainer.style.overflowY = "scroll";
+    this.debugContainer.style.border = "1px solid #ccc";
+    this.debugContainer.style.padding = "5px";
+    this.debugContainer.style.marginTop = "10px";
+    buttons.after(this.debugContainer);
+    for (const message of bufferedLogs) {
+      this.addDebugMessage(message);
+    }
+  }
+  addDebugMessage(message) {
+    if (!this.debugContainer)
+      return;
+    const p = this.doc.createElement("pre");
+    p.style.margin = "0";
+    p.style.fontFamily = "monospace";
+    p.textContent = message;
+    this.debugContainer.appendChild(p);
+    this.debugContainer.scrollTop = this.debugContainer.scrollHeight;
+  }
 }
 
 // view/view.ts
@@ -2382,7 +2409,7 @@ class View {
   bagTileCountContainer;
   gameState;
   gameSetup;
-  dropTarget = null;
+  dropTargetMap = new Map;
   doc;
   constructor(gameState, browser) {
     this.gameState = gameState;
@@ -2412,6 +2439,39 @@ class View {
       element.appendChild(valueDiv);
     }
   }
+  addBonusTextToSquare(squareDiv, square) {
+    const bonusSpan = this.doc.createElement("span");
+    bonusSpan.className = "bonus-text";
+    if (square.letterBonus === 2)
+      bonusSpan.textContent = "2L";
+    if (square.letterBonus === 3)
+      bonusSpan.textContent = "3L";
+    if (square.wordBonus === 2)
+      bonusSpan.textContent = "2W";
+    if (square.wordBonus === 3)
+      bonusSpan.textContent = "3W";
+    if (bonusSpan.textContent)
+      squareDiv.appendChild(bonusSpan);
+  }
+  renderSquare(row, col, squareDiv = this.getElementByLocation(row, col)) {
+    if (!squareDiv)
+      return;
+    squareDiv.innerHTML = "";
+    squareDiv.classList.remove("placed");
+    const square = this.gameState.board.squares[row][col];
+    if (square.tile) {
+      this.addTileToElement(squareDiv, square.tile, square.assignedLetter);
+    } else {
+      const placedTile = this.gameState.tilesHeld.find((p) => p.row === row && p.col === col);
+      if (placedTile) {
+        this.addTileToElement(squareDiv, placedTile.tile, placedTile.assignedLetter);
+        squareDiv.classList.add("placed");
+        squareDiv.tabIndex = 0;
+      } else {
+        this.addBonusTextToSquare(squareDiv, square);
+      }
+    }
+  }
   renderBoard() {
     this.boardTransformer.innerHTML = "";
     const centerSquare = this.gameState.board.centerSquare;
@@ -2437,30 +2497,8 @@ class View {
           squareDiv.classList.add("center");
         squareDiv.dataset.row = String(r);
         squareDiv.dataset.col = String(c);
-        if (square.tile) {
-          this.addTileToElement(squareDiv, square.tile, square.assignedLetter);
-        } else {
-          const placedTile = this.gameState.tilesHeld.find((p) => p.row === r && p.col === c);
-          if (placedTile) {
-            this.addTileToElement(squareDiv, placedTile.tile, placedTile.assignedLetter);
-            squareDiv.classList.add("placed");
-            squareDiv.tabIndex = 0;
-          } else {
-            const bonusSpan = this.doc.createElement("span");
-            bonusSpan.className = "bonus-text";
-            if (square.letterBonus === 2)
-              bonusSpan.textContent = "2L";
-            if (square.letterBonus === 3)
-              bonusSpan.textContent = "3L";
-            if (square.wordBonus === 2)
-              bonusSpan.textContent = "2W";
-            if (square.wordBonus === 3)
-              bonusSpan.textContent = "3W";
-            if (bonusSpan.textContent)
-              squareDiv.appendChild(bonusSpan);
-          }
-        }
         this.boardTransformer.appendChild(squareDiv);
+        this.renderSquare(r, c, squareDiv);
       }
     }
   }
@@ -2523,35 +2561,42 @@ class View {
       this.scorePanel.appendChild(scoreDiv);
     }
   }
+  renderRackSpot(rackName, col) {
+    const spotElement = this.getElementByLocation(rackName, col);
+    if (!spotElement)
+      return;
+    spotElement.innerHTML = "";
+    spotElement.removeAttribute("tabIndex");
+    spotElement.className = "";
+    const tilePlacement = this.gameState.tilesHeld.find((p) => p.row === rackName && p.col === col);
+    if (tilePlacement) {
+      spotElement.className = "tile";
+      this.addTileToElement(spotElement, tilePlacement.tile, tilePlacement.assignedLetter);
+      spotElement.tabIndex = 0;
+    } else {
+      spotElement.className = "tile-spot";
+    }
+  }
   renderRacklike(container, name) {
     container.innerHTML = "";
-    const tiles = this.gameState.tilesHeld.filter((p) => p.row === name);
-    const tileElements = [];
-    for (const tilePlacement of tiles) {
-      const tileDiv = this.doc.createElement("div");
-      tileDiv.className = "tile";
-      this.addTileToElement(tileDiv, tilePlacement.tile, tilePlacement.assignedLetter);
-      tileDiv.dataset.row = String(tilePlacement.row);
-      tileDiv.dataset.col = String(tilePlacement.col);
-      tileDiv.tabIndex = 0;
-      tileElements[tilePlacement.col] = tileDiv;
-    }
     for (let i = 0;i < this.gameState.settings.rackCapacity; i++) {
-      const tileDiv = tileElements[i];
-      if (tileDiv) {
-        container.appendChild(tileDiv);
-      } else {
-        const emptySpot = this.doc.createElement("div");
-        emptySpot.className = "tile-spot";
-        emptySpot.dataset.row = name;
-        emptySpot.dataset.col = String(i);
-        container.appendChild(emptySpot);
-      }
+      const spotDiv = this.doc.createElement("div");
+      spotDiv.dataset.row = name;
+      spotDiv.dataset.col = String(i);
+      container.appendChild(spotDiv);
+      this.renderRackSpot(name, i);
     }
   }
   renderRack() {
     this.renderRacklike(this.rackContainer, "rack");
     this.renderRacklike(this.exchangeContainer, "exchange");
+  }
+  renderTileSpot(row, col) {
+    if (isBoardPlacementRow(row)) {
+      this.renderSquare(row, col);
+    } else {
+      this.renderRackSpot(row, col);
+    }
   }
   renderBagTileCount() {
     this.bagTileCountContainer.textContent = `Tiles in bag: ${this.gameState.numberOfTilesInBag}`;
@@ -2572,28 +2617,31 @@ class View {
     }
     return this.doc.querySelector(selector);
   }
-  clearDropTarget() {
-    if (this.dropTarget) {
-      const el = this.getElementByLocation(this.dropTarget.row, this.dropTarget.col);
-      el?.classList.remove("drop-target");
+  clearDropTarget(dropTargetId) {
+    const dropTarget = this.dropTargetMap.get(dropTargetId);
+    if (dropTarget) {
+      this.dropTargetMap.delete(dropTargetId);
+      if (!this.dropTargetMap.values().find((v) => v.row === dropTarget.row && v.col === dropTarget.col)) {
+        const el = this.getElementByLocation(dropTarget.row, dropTarget.col);
+        el?.classList.remove("drop-target");
+      }
     }
-    this.dropTarget = null;
   }
-  setDropTarget(row, col) {
-    this.clearDropTarget();
+  setDropTarget(dropTargetId, row, col) {
+    this.clearDropTarget(dropTargetId);
     const el = this.getElementByLocation(row, col);
     if (el) {
       el.classList.add("drop-target");
-      this.dropTarget = { row, col };
+      this.dropTargetMap.set(dropTargetId, { row, col });
     }
   }
-  getDropTarget() {
-    return this.dropTarget;
+  getDropTarget(dropTargetId) {
+    return this.dropTargetMap.get(dropTargetId);
   }
-  deselect(selectedTile) {
+  deselect(dropTargetId, selectedTile) {
     const prevSelected = this.getElementByLocation(selectedTile.row, selectedTile.col);
     prevSelected?.classList.remove("selected");
-    this.clearDropTarget();
+    this.clearDropTarget(dropTargetId);
   }
   select(row, col) {
     const element = this.getElementByLocation(row, col);
@@ -2640,7 +2688,7 @@ class View {
     if (scale > 1) {
       this.boardContainer.style.touchAction = "none";
     } else {
-      this.boardContainer.style.touchAction = "manipulation";
+      this.boardContainer.style.touchAction = "pan-x pan-y";
     }
   }
   getBoardContainer() {
@@ -2661,12 +2709,12 @@ class KeyHandler {
     this.deselect();
     this.selectedTile = { row, col };
     this.view.select(row, col);
-    this.view.setDropTarget(row, col);
+    this.view.setDropTarget("keyboard", row, col);
   }
   deselect() {
     if (!this.selectedTile)
       return;
-    this.view.deselect(this.selectedTile);
+    this.view.deselect("keyboard", this.selectedTile);
     this.selectedTile = null;
   }
   keydown(evt) {
@@ -2681,7 +2729,7 @@ class KeyHandler {
       case "Enter": {
         evt.preventDefault();
         if (this.selectedTile) {
-          const dropTarget = this.view.getDropTarget();
+          const dropTarget = this.view.getDropTarget("keyboard");
           if (!dropTarget)
             return;
           const { row: toRow, col: toCol } = dropTarget;
@@ -2709,7 +2757,7 @@ class KeyHandler {
           }
         } else {
           this.select(row, col);
-          this.view.setDropTarget(row, col);
+          this.view.setDropTarget("keyboard", row, col);
         }
         break;
       }
@@ -2733,7 +2781,7 @@ class KeyHandler {
     }
   }
   moveDropTarget(key) {
-    const dropTarget = this.view.getDropTarget();
+    const dropTarget = this.view.getDropTarget("keyboard");
     if (!this.selectedTile || !dropTarget)
       return;
     let { row: r, col: c } = dropTarget;
@@ -2793,7 +2841,7 @@ class KeyHandler {
         }
         break;
     }
-    this.view.setDropTarget(r, c);
+    this.view.setDropTarget("keyboard", r, c);
   }
 }
 
@@ -2801,17 +2849,11 @@ class KeyHandler {
 class PointerHandler {
   gameState;
   view;
-  draggingTile = null;
-  ghostTile = null;
+  pointerInfoMap = new Map;
   scale = 1;
   panX = 0;
   panY = 0;
-  panStart = { x: 0, y: 0 };
-  isPanning = false;
   lastTap = 0;
-  pointerMoved = false;
-  downX = 0;
-  downY = 0;
   constructor(gameState, view) {
     this.gameState = gameState;
     this.view = view;
@@ -2825,15 +2867,22 @@ class PointerHandler {
     this.view.setBoardTransform(this.scale, this.panX, this.panY);
   }
   pointerCancel(evt) {
-    this.isPanning = false;
+    this.pointerInfoMap.delete(evt.pointerId);
+    this.view.clearDropTarget(evt.pointerId);
   }
   pointerDown(evt) {
+    console.debug(`pointerDown ${evt.pointerId} ${evt.clientX.toFixed()},${evt.clientY.toFixed()}`);
     if (evt.button !== 0)
       return;
     const target = evt.target;
-    this.pointerMoved = false;
-    this.downX = evt.clientX;
-    this.downY = evt.clientY;
+    const tapInfo = {
+      pointerMoved: false,
+      downX: evt.clientX,
+      downY: evt.clientY,
+      isPanning: false,
+      draggingTile: null
+    };
+    let info = tapInfo;
     const tileTarget = target.closest(".tile, .placed");
     if (tileTarget instanceof HTMLElement) {
       evt.preventDefault();
@@ -2841,61 +2890,79 @@ class PointerHandler {
       const col = parseInt(tileTarget.dataset.col, 10);
       const rowStr = tileTarget.dataset.row;
       const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
-      this.draggingTile = { row, col, element: tileTarget };
-      return;
-    }
-    if (target.closest("#board-container")) {
+      const dragInfo = {
+        ...tapInfo,
+        draggingTile: { row, col, element: tileTarget },
+        ghostTile: null
+      };
+      info = dragInfo;
+    } else if (target.closest("#board-container")) {
       if (this.scale > 1) {
         evt.preventDefault();
         evt.stopPropagation();
-        this.isPanning = true;
-        this.panStart.x = evt.clientX - this.panX;
-        this.panStart.y = evt.clientY - this.panY;
+        const panInfo = {
+          ...tapInfo,
+          isPanning: true,
+          panStart: {
+            x: evt.clientX - this.panX,
+            y: evt.clientY - this.panY
+          }
+        };
+        info = panInfo;
       }
     }
+    this.pointerInfoMap.set(evt.pointerId, info);
   }
   pointerMove(evt) {
-    if (!this.pointerMoved && Math.hypot(evt.clientX - this.downX, evt.clientY - this.downY) > 5) {
-      this.pointerMoved = true;
+    const info = this.pointerInfoMap.get(evt.pointerId);
+    console.debug(`pointerMove ${evt.pointerId} ${info ? "yes" : "no"} ${evt.clientX.toFixed()},${evt.clientY.toFixed()}`);
+    if (!info)
+      return;
+    if (!info.pointerMoved && Math.hypot(evt.clientX - info.downX, evt.clientY - info.downY) > 5) {
+      info.pointerMoved = true;
     }
-    if (this.isPanning || this.draggingTile) {
+    if (info.isPanning || info.draggingTile) {
       evt.preventDefault();
     }
-    if (this.isPanning) {
-      this.panX = evt.clientX - this.panStart.x;
-      this.panY = evt.clientY - this.panStart.y;
+    if (info.isPanning) {
+      this.panX = evt.clientX - info.panStart.x;
+      this.panY = evt.clientY - info.panStart.y;
       this.updateTransform();
-    } else if (this.draggingTile && this.pointerMoved) {
-      if (!this.ghostTile) {
-        this.ghostTile = this.view.createGhostTile(this.draggingTile.element);
-        this.draggingTile.element.classList.add("dragging");
+    } else if (info.draggingTile && info.pointerMoved) {
+      if (!info.ghostTile) {
+        info.ghostTile = this.view.createGhostTile(info.draggingTile.element);
+        info.draggingTile.element.classList.add("dragging");
       }
-      this.ghostTile.style.left = `${evt.clientX}px`;
-      this.ghostTile.style.top = `${evt.clientY}px`;
-      this.ghostTile.style.display = "none";
+      info.ghostTile.style.left = `${evt.clientX}px`;
+      info.ghostTile.style.top = `${evt.clientY}px`;
+      info.ghostTile.style.display = "none";
       const targetElement = document.elementFromPoint(evt.clientX, evt.clientY);
-      this.ghostTile.style.display = "";
+      info.ghostTile.style.display = "";
       if (targetElement) {
         const dropTarget = targetElement.closest(".square, .tile-spot, .tile, .placed");
         if (dropTarget instanceof HTMLElement && dropTarget.dataset.row && dropTarget.dataset.col) {
           const toRowStr = dropTarget.dataset.row;
           const toRow = toRowStr === "rack" ? "rack" : toRowStr === "exchange" ? "exchange" : parseInt(toRowStr, 10);
           const toCol = parseInt(dropTarget.dataset.col, 10);
-          this.view.setDropTarget(toRow, toCol);
+          this.view.setDropTarget(evt.pointerId, toRow, toCol);
         } else {
-          this.view.clearDropTarget();
+          this.view.clearDropTarget(evt.pointerId);
         }
       }
     }
   }
   pointerUp(evt) {
+    const info = this.pointerInfoMap.get(evt.pointerId);
+    console.debug(`pointerUp ${evt.pointerId} ${info ? "yes" : "no"}`);
+    if (!info)
+      return;
     const target = evt.target;
-    if (this.ghostTile) {
-      const dropTarget = this.view.getDropTarget();
+    if (!info.isPanning && info.draggingTile && info.ghostTile) {
+      const dropTarget = this.view.getDropTarget(evt.pointerId);
       if (dropTarget) {
         try {
-          const fromRow = this.draggingTile.row;
-          const fromCol = this.draggingTile.col;
+          const fromRow = info.draggingTile.row;
+          const fromCol = info.draggingTile.col;
           const toRow = dropTarget.row;
           const toCol = dropTarget.col;
           const selectedPlacement = this.gameState.tilesHeld.find((p) => p.row === fromRow && p.col === fromCol);
@@ -2913,9 +2980,9 @@ class PointerHandler {
           alert(e);
         }
       }
-      this.view.removeGhostTile(this.ghostTile);
-      this.draggingTile.element.classList.remove("dragging");
-    } else if (target.closest("#board-container") && !this.pointerMoved) {
+      this.view.removeGhostTile(info.ghostTile);
+      info.draggingTile.element.classList.remove("dragging");
+    } else if (target.closest("#board-container") && !info.pointerMoved) {
       const now = Date.now();
       if (now - this.lastTap < 300) {
         if (this.scale > 1) {
@@ -2923,10 +2990,20 @@ class PointerHandler {
           this.panX = 0;
           this.panY = 0;
         } else {
+          let toBoardCoordinate = function(evtCoordinate, boardLo, boardHi, squareLength) {
+            const boardCoordinate = evtCoordinate - boardLo;
+            const boardLength = boardHi - boardLo;
+            if (boardCoordinate < squareLength)
+              return 0;
+            if (boardCoordinate + squareLength > boardLength)
+              return boardLength;
+            return boardCoordinate;
+          };
           this.scale = 1.8;
           const boardRect = this.view.getBoardContainer().getBoundingClientRect();
-          const boardX = evt.clientX - boardRect.left;
-          const boardY = evt.clientY - boardRect.top;
+          const square = target.closest(".square")?.getBoundingClientRect();
+          const boardX = toBoardCoordinate(evt.clientX, boardRect.left, boardRect.right, square ? square.right - square.left : 0);
+          const boardY = toBoardCoordinate(evt.clientY, boardRect.top, boardRect.bottom, square ? square.bottom - square.top : 0);
           this.panX = boardX * (1 - this.scale) / this.scale;
           this.panY = boardY * (1 - this.scale) / this.scale;
         }
@@ -2934,10 +3011,8 @@ class PointerHandler {
       }
       this.lastTap = now;
     }
-    this.isPanning = false;
-    this.draggingTile = null;
-    this.ghostTile = null;
-    this.view.clearDropTarget();
+    this.pointerInfoMap.delete(evt.pointerId);
+    this.view.clearDropTarget(evt.pointerId);
   }
 }
 
@@ -3016,6 +3091,9 @@ class DomBrowser {
   getHash() {
     return window.location.hash;
   }
+  getSearch() {
+    return window.location.search;
+  }
   setHash(hash) {
     window.location.hash = hash;
   }
@@ -3069,6 +3147,7 @@ class App {
   gameState;
   view;
   controller;
+  bufferedLogs = [];
   constructor(browser) {
     this.browser = browser;
   }
@@ -3086,6 +3165,9 @@ class App {
     }
   }
   async init() {
+    if (this.browser.getURLSearchParams(this.browser.getSearch()).has("debug")) {
+      this.initDebug();
+    }
     const handleGameChange = async () => {
       const params = this.browser.getURLSearchParams(this.browser.getHash()?.substring(1) || "");
       const gidParam = params.get("gid");
@@ -3112,20 +3194,22 @@ class App {
       this.updateUrl();
       this.view = new View(this.gameState, this.browser);
       this.controller = new Controller(this.gameState, this.view, this.browser);
+      if (this.browser.getURLSearchParams(this.browser.getSearch()).has("debug")) {
+        this.view.gameSetup.initDebugDisplay(this.bufferedLogs);
+        this.bufferedLogs = [];
+      }
       this.view.renderBoard();
       this.view.renderRack();
       this.view.renderScores();
       this.view.renderBagTileCount();
       this.view.renderPassExchangeButton();
       this.gameState.addEventListener("tilemove", (evt) => {
-        if (!isBoardPlacementRow(evt.detail.fromRow) || !isBoardPlacementRow(evt.detail.placement.row)) {
-          this.view.renderRack();
+        if (evt.detail.fromRow !== undefined && evt.detail.fromCol !== undefined) {
+          this.view.renderTileSpot(evt.detail.fromRow, evt.detail.fromCol);
         }
+        this.view.renderTileSpot(evt.detail.placement.row, evt.detail.placement.col);
         if (evt.detail.fromRow === "exchange" !== (evt.detail.placement.row === "exchange")) {
           this.view.renderPassExchangeButton();
-        }
-        if (isBoardPlacementRow(evt.detail.fromRow) || isBoardPlacementRow(evt.detail.placement.row)) {
-          this.view.renderBoard();
         }
         this.saveGameState();
       });
@@ -3144,6 +3228,21 @@ class App {
     this.browser.addHashChangeListener(handleGameChange);
     this.browser.addPasteListener(this.handlePaste.bind(this));
     await handleGameChange();
+  }
+  initDebug() {
+    const app = this;
+    for (const level of ["log", "warn", "error", "info"]) {
+      const original = console[level];
+      console[level] = function(...args) {
+        original.apply(console, args);
+        const message = args.map(String).join(" ");
+        if (app.view?.gameSetup) {
+          app.view.gameSetup.addDebugMessage(message);
+        } else {
+          app.bufferedLogs.push(message);
+        }
+      };
+    }
   }
   async handlePaste(pastedText) {
     try {
