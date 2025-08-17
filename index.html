@@ -2871,14 +2871,13 @@ class PointerHandler {
     this.view.clearDropTarget(evt.pointerId);
   }
   pointerDown(evt) {
-    console.debug(`pointerDown ${evt.pointerId} ${evt.clientX.toFixed()},${evt.clientY.toFixed()}`);
     if (evt.button !== 0)
       return;
     const target = evt.target;
     const tapInfo = {
-      pointerMoved: false,
       downX: evt.clientX,
       downY: evt.clientY,
+      pointerMoved: false,
       isPanning: false,
       draggingTile: null
     };
@@ -2903,10 +2902,8 @@ class PointerHandler {
         const panInfo = {
           ...tapInfo,
           isPanning: true,
-          panStart: {
-            x: evt.clientX - this.panX,
-            y: evt.clientY - this.panY
-          }
+          x: evt.clientX,
+          y: evt.clientY
         };
         info = panInfo;
       }
@@ -2915,7 +2912,6 @@ class PointerHandler {
   }
   pointerMove(evt) {
     const info = this.pointerInfoMap.get(evt.pointerId);
-    console.debug(`pointerMove ${evt.pointerId} ${info ? "yes" : "no"} ${evt.clientX.toFixed()},${evt.clientY.toFixed()}`);
     if (!info)
       return;
     if (!info.pointerMoved && Math.hypot(evt.clientX - info.downX, evt.clientY - info.downY) > 5) {
@@ -2925,8 +2921,11 @@ class PointerHandler {
       evt.preventDefault();
     }
     if (info.isPanning) {
-      this.panX = evt.clientX - info.panStart.x;
-      this.panY = evt.clientY - info.panStart.y;
+      const panningPointerCount = this.pointerInfoMap.values().reduce((sum, curr) => sum + (curr.isPanning ? 1 : 0), 0);
+      this.panX += (evt.clientX - info.x) / panningPointerCount / this.scale;
+      this.panY += (evt.clientY - info.y) / panningPointerCount / this.scale;
+      info.x = evt.clientX;
+      info.y = evt.clientY;
       this.updateTransform();
     } else if (info.draggingTile && info.pointerMoved) {
       if (!info.ghostTile) {
@@ -2953,7 +2952,6 @@ class PointerHandler {
   }
   pointerUp(evt) {
     const info = this.pointerInfoMap.get(evt.pointerId);
-    console.debug(`pointerUp ${evt.pointerId} ${info ? "yes" : "no"}`);
     if (!info)
       return;
     const target = evt.target;
