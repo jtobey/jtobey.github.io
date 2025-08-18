@@ -13,7 +13,7 @@
 #board-container {
   overflow: hidden;
   position: relative;
-  touch-action: pan-x pan-y;
+  touch-action: none;
   border: 1px solid #ccc;
   width: 601px;
   height: 601px;
@@ -2685,11 +2685,6 @@ class View {
   }
   setBoardTransform(scale, x, y) {
     this.boardTransformer.style.transform = `scale(${scale}) translate(${x}px, ${y}px)`;
-    if (scale > 1) {
-      this.boardContainer.style.touchAction = "none";
-    } else {
-      this.boardContainer.style.touchAction = "pan-x pan-y";
-    }
   }
   getBoardContainer() {
     return this.boardContainer;
@@ -2859,6 +2854,7 @@ class PointerHandler {
     this.view = view;
   }
   updateTransform() {
+    this.scale = Math.max(1, Math.min(4, this.scale));
     const boardRect = this.view.getBoardContainer().getBoundingClientRect();
     const maxPanX = (this.scale * boardRect.width - boardRect.width) / this.scale;
     const maxPanY = (this.scale * boardRect.height - boardRect.height) / this.scale;
@@ -2867,6 +2863,9 @@ class PointerHandler {
     this.view.setBoardTransform(this.scale, this.panX, this.panY);
   }
   pointerCancel(evt) {
+    const info = this.pointerInfoMap.get(evt.pointerId);
+    if (info)
+      console.debug(`Pointer cancel: ${evt.pointerId} (${info.x.toFixed(2)},${info.y.toFixed(2)})`);
     this.pointerInfoMap.delete(evt.pointerId);
     this.view.clearDropTarget(evt.pointerId);
   }
@@ -2883,7 +2882,6 @@ class PointerHandler {
       isPanning: false,
       draggingTile: null
     };
-    let info = tapInfo;
     const tileTarget = target.closest(".tile, .placed");
     if (tileTarget instanceof HTMLElement) {
       evt.preventDefault();
@@ -2896,24 +2894,28 @@ class PointerHandler {
         draggingTile: { row, col, element: tileTarget },
         ghostTile: null
       };
-      info = dragInfo;
-    } else if (target.closest("#board-container")) {
-      const other = this.pointerInfoMap.values().find((info2) => !info2.isPanning && !info2.draggingTile);
-      if (other)
-        console.log("Second active board touch detected.");
-      if (this.scale > 1 || other) {
-        evt.preventDefault();
-        evt.stopPropagation();
-        const panInfo = {
-          ...tapInfo,
-          isPanning: true
-        };
-        info = panInfo;
-        if (other)
-          other.isPanning = true;
+      this.pointerInfoMap.set(evt.pointerId, dragInfo);
+    } else {
+      const board = target.closest("#board-container");
+      if (board) {
+        const other = this.pointerInfoMap.values().find((info) => !info.isPanning && !info.draggingTile);
+        if (this.scale > 1 || other) {
+          evt.preventDefault();
+          evt.stopPropagation();
+          const panInfo = {
+            ...tapInfo,
+            isPanning: true
+          };
+          this.pointerInfoMap.set(evt.pointerId, panInfo);
+          if (other) {
+            const otherPanInfo = other;
+            otherPanInfo.isPanning = true;
+          }
+        } else {
+          this.pointerInfoMap.set(evt.pointerId, tapInfo);
+        }
       }
     }
-    this.pointerInfoMap.set(evt.pointerId, info);
   }
   pointerMove(evt) {
     const info = this.pointerInfoMap.get(evt.pointerId);
@@ -2926,33 +2928,38 @@ class PointerHandler {
       evt.preventDefault();
     }
     if (info.isPanning) {
-      const panningPointerCount = this.pointerInfoMap.values().reduce((sum, curr) => sum + (curr.isPanning ? 1 : 0), 0);
-      this.panX += (evt.clientX - info.x) / panningPointerCount / this.scale;
-      this.panY += (evt.clientY - info.y) / panningPointerCount / this.scale;
-      if (panningPointerCount > 1) {
-        const panningPointerInfos = [...this.pointerInfoMap.values().filter((anyInfo) => anyInfo.isPanning)];
-        const midpointBefore = panningPointerInfos.reduce((sum, curr) => {
-          return {
-            x: sum.x + curr.x / panningPointerCount,
-            y: sum.y + curr.y / panningPointerCount
-          };
-        }, { x: 0, y: 0 });
-        const getMaxDistance = (midpoint, points) => {
-          return Math.max(...points.map((p) => Math.hypot(midpoint.x, midpoint.y, p.x, p.y)));
+      const panningPointerInfos = [...this.pointerInfoMap.values().filter((anyInfo) => anyInfo.isPanning)];
+      const panningPointerCount = panningPointerInfos.length;
+      const midpointBefore = panningPointerInfos.reduce((sum, curr) => {
+        return {
+          x: sum.x + curr.x / panningPointerCount,
+          y: sum.y + curr.y / panningPointerCount
         };
-        const maxDistanceBefore = getMaxDistance(midpointBefore, panningPointerInfos);
-        const midpointAfter = {
-          x: midpointBefore.x + (evt.clientX - info.x) / panningPointerCount,
-          y: midpointBefore.y + (evt.clientY - info.y) / panningPointerCount
-        };
-        const maxDistanceAfter = getMaxDistance(midpointAfter, [
-          { x: evt.clientX, y: evt.clientY },
-          ...panningPointerInfos.filter((anyInfo) => anyInfo !== info)
-        ]);
-        if (maxDistanceBefore > 0 && maxDistanceAfter > 0) {
-          this.scale *= maxDistanceAfter / maxDistanceBefore;
-        }
+      }, { x: 0, y: 0 });
+      const getMaxDistance = (midpoint, points) => {
+        return Math.max(...points.map((p) => Math.hypot(midpoint.x - p.x, midpoint.y - p.y)));
+      };
+      const maxDistanceBefore = getMaxDistance(midpointBefore, panningPointerInfos);
+      const midpointAfter = {
+        x: midpointBefore.x + (evt.clientX - info.x) / panningPointerCount,
+        y: midpointBefore.y + (evt.clientY - info.y) / panningPointerCount
+      };
+      const pointsAfter = [
+        { x: evt.clientX, y: evt.clientY },
+        ...panningPointerInfos.filter((anyInfo) => anyInfo !== info)
+      ];
+      const maxDistanceAfter = getMaxDistance(midpointAfter, pointsAfter);
+      if (maxDistanceBefore > 0 && maxDistanceAfter > 0) {
+        const multiplier = maxDistanceAfter / maxDistanceBefore;
+        const boardRect = this.view.getBoardContainer().getBoundingClientRect();
+        const boardX = midpointBefore.x - boardRect.left;
+        const boardY = midpointBefore.y - boardRect.top;
+        this.panX -= boardX * (multiplier - 1);
+        this.panY -= boardY * (multiplier - 1);
+        this.scale *= multiplier;
       }
+      this.panX += (midpointAfter.x - midpointBefore.x) / this.scale;
+      this.panY += (midpointAfter.y - midpointBefore.y) / this.scale;
       this.updateTransform();
     } else if (info.draggingTile && info.pointerMoved) {
       if (!info.ghostTile) {
@@ -3095,6 +3102,7 @@ class Controller {
     gameContainer.addEventListener("pointerdown", this.pointerHandler.pointerDown.bind(this.pointerHandler));
     doc.addEventListener("pointermove", this.pointerHandler.pointerMove.bind(this.pointerHandler));
     doc.addEventListener("pointerup", this.pointerHandler.pointerUp.bind(this.pointerHandler));
+    doc.addEventListener("pointercancel", this.pointerHandler.pointerCancel.bind(this.pointerHandler));
     gameContainer.addEventListener("keydown", this.keyHandler.keydown.bind(this.keyHandler));
     doc.getElementById("play-word").addEventListener("click", this.playWordClick.bind(this));
     doc.getElementById("pass-exchange").addEventListener("click", this.passOrExchangeClick.bind(this));
