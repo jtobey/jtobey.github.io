@@ -370,11 +370,14 @@ function arraysEqual(a1, a2, warnIfNot = true) {
     console.warn(`[${a1}] does not equal [${a2}]`);
   return false;
 }
-function objectsEqual(o1, o2) {
-  const keys = Object.keys(o1).sort();
-  if (!arraysEqual(keys, Object.keys(o2).sort(), false))
+function mapsEqual(m1, m2) {
+  if (m1.size !== m2.size)
     return false;
-  return keys.every((key) => o1[key] === o2[key]);
+  for (const [key, val] of m1) {
+    if (!m2.has(key) || m2.get(key) !== val)
+      return false;
+  }
+  return true;
 }
 
 // game/player.ts
@@ -427,63 +430,63 @@ var DEFAULT_PLAYER_LIST = [
   new Player({ id: "1" }),
   new Player({ id: "2" })
 ];
-var DEFAULT_LETTER_COUNTS = {
-  A: 9,
-  B: 2,
-  C: 2,
-  D: 4,
-  E: 12,
-  F: 2,
-  G: 2,
-  H: 2,
-  I: 9,
-  J: 1,
-  K: 1,
-  L: 4,
-  M: 2,
-  N: 6,
-  O: 8,
-  P: 2,
-  Q: 1,
-  R: 6,
-  S: 5,
-  T: 6,
-  U: 4,
-  V: 2,
-  W: 2,
-  X: 1,
-  Y: 2,
-  Z: 1,
-  "": 2
-};
-var DEFAULT_LETTER_VALUES = {
-  A: 1,
-  B: 3,
-  C: 4,
-  D: 2,
-  E: 1,
-  F: 4,
-  G: 3,
-  H: 4,
-  I: 1,
-  J: 9,
-  K: 5,
-  L: 1,
-  M: 3,
-  N: 1,
-  O: 1,
-  P: 3,
-  Q: 10,
-  R: 1,
-  S: 1,
-  T: 1,
-  U: 2,
-  V: 5,
-  W: 4,
-  X: 8,
-  Y: 4,
-  Z: 10
-};
+var DEFAULT_LETTER_COUNTS = new Map([
+  ["A", 9],
+  ["B", 2],
+  ["C", 2],
+  ["D", 4],
+  ["E", 12],
+  ["F", 2],
+  ["G", 2],
+  ["H", 2],
+  ["I", 9],
+  ["J", 1],
+  ["K", 1],
+  ["L", 4],
+  ["M", 2],
+  ["N", 6],
+  ["O", 8],
+  ["P", 2],
+  ["Q", 1],
+  ["R", 6],
+  ["S", 5],
+  ["T", 6],
+  ["U", 4],
+  ["V", 2],
+  ["W", 2],
+  ["X", 1],
+  ["Y", 2],
+  ["Z", 1],
+  ["", 2]
+]);
+var DEFAULT_LETTER_VALUES = new Map([
+  ["A", 1],
+  ["B", 3],
+  ["C", 4],
+  ["D", 2],
+  ["E", 1],
+  ["F", 4],
+  ["G", 3],
+  ["H", 4],
+  ["I", 1],
+  ["J", 9],
+  ["K", 5],
+  ["L", 1],
+  ["M", 3],
+  ["N", 1],
+  ["O", 1],
+  ["P", 3],
+  ["Q", 10],
+  ["R", 1],
+  ["S", 1],
+  ["T", 1],
+  ["U", 2],
+  ["V", 5],
+  ["W", 4],
+  ["X", 8],
+  ["Y", 4],
+  ["Z", 10]
+]);
 var DEFAULT_BOARD_LAYOUT = [
   "D..d..T......T.",
   ".D...D...t.t..T",
@@ -522,8 +525,8 @@ class Settings {
     return {
       version: this.version,
       players: this.players.map((p) => p.toJSON()),
-      letterCounts: this.letterCounts,
-      letterValues: this.letterValues,
+      letterCounts: mapToJSON(this.letterCounts),
+      letterValues: mapToJSON(this.letterValues),
       boardLayout: this.boardLayout,
       bingoBonus: this.bingoBonus,
       rackCapacity: this.rackCapacity,
@@ -565,10 +568,26 @@ class Settings {
   }
 }
 function checkLetterToNumberMap(name, json) {
-  if (!(typeof json === "object" && Object.keys(json).every((k) => typeof k === "string") && Object.values(json).every((v) => typeof v === "number"))) {
-    throw new TypeError(`Invalid Settings.${name} serialization: ${JSON.stringify(json)}`);
+  function fail(msg) {
+    throw new TypeError(`Invalid Settings.${name} serialization: ${msg}`);
   }
-  return json;
+  if (!Array.isArray(json)) {
+    if (typeof json !== "object")
+      fail(`Type is "${typeof json}", not "object" as expected.`);
+    json = [...Object.entries(json)];
+  }
+  json.forEach(([k, v]) => {
+    if (typeof k !== "string")
+      fail(`Letter ${k} has type "${typeof k}", not "string" as expected.`);
+    if (typeof v !== "number")
+      fail(`Letter ${k} has value ${v}, not a number as expected.`);
+  });
+  return new Map(json);
+}
+function mapToJSON(map) {
+  if (!(map instanceof Map))
+    return Object.entries(map);
+  return [...map.entries()];
 }
 
 // game/tiles_state.ts
@@ -609,6 +628,9 @@ class Turn {
       throw new Error(`Can't exchange and play tiles on the same turn. Turn number is ${turnNumber}.`);
     }
   }
+}
+function getPlayerForTurnNumber(players, turnNumber) {
+  return players[(fromTurnNumber(turnNumber) - 1) % players.length];
 }
 function updateTurnHistory({
   history,
@@ -695,10 +717,7 @@ function isBoardPlacement(tilePlacement) {
 }
 function makeTiles({ letterCounts, letterValues }) {
   const tiles = [];
-  const countsEntries = letterCounts instanceof Map ? letterCounts.entries() : Object.entries(letterCounts);
-  if (!(letterValues instanceof Map))
-    letterValues = new Map(Object.entries(letterValues));
-  for (const [letter, count] of countsEntries) {
+  for (const [letter, count] of letterCounts) {
     tiles.push(...Array(count).fill(new Tile({ letter, value: letterValues.get(letter) || 0 })));
   }
   return tiles;
@@ -954,6 +973,207 @@ class HonorSystemTilesState extends EventTarget {
     }
     return new HonorSystemTilesState([], { seed: "" }, [], json.rackCapacity, json.numberOfTurnsPlayed, racks, bag, isGameOver, false);
   }
+}
+
+// game/game_params.ts
+class UrlError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UrlError";
+  }
+}
+function getBagParam(settings, defaults) {
+  const letterToUrl = (l) => l === "" ? "_" : l;
+  if (mapsEqual(settings.letterCounts, defaults.letterCounts) && mapsEqual(settings.letterValues, defaults.letterValues)) {
+    return;
+  }
+  const fullBagParam = [...settings.letterCounts.entries()].map(([letter, count]) => `${letterToUrl(letter)}-${count}-${settings.letterValues.get(letter) ?? 0}`).join(".");
+  const settingsLetters = new Set(settings.letterCounts.keys());
+  const defaultLetters = new Set(defaults.letterCounts.keys());
+  const diffParts = [];
+  for (const letter of settingsLetters) {
+    if (!defaultLetters.has(letter)) {
+      const count = settings.letterCounts.get(letter);
+      const value = settings.letterValues.get(letter) ?? 0;
+      diffParts.push(`${letterToUrl(letter)}-${count}-${value}`);
+    }
+  }
+  for (const letter of defaultLetters) {
+    const settingsHasLetter = settingsLetters.has(letter);
+    const count = settings.letterCounts.get(letter);
+    const value = settings.letterValues.get(letter);
+    const defaultCount = defaults.letterCounts.get(letter);
+    const defaultValue = defaults.letterValues.get(letter);
+    if (settingsHasLetter && count === defaultCount && value === defaultValue) {
+      continue;
+    }
+    if (!settingsHasLetter) {
+      diffParts.push(`${letterToUrl(letter)}-0`);
+      continue;
+    }
+    let part = letterToUrl(letter);
+    const countIsDefault = count === defaultCount;
+    const valueIsDefault = value === defaultValue;
+    if (!countIsDefault && !valueIsDefault) {
+      part += `-${count}-${value}`;
+    } else if (!countIsDefault) {
+      part += `-${count}`;
+    } else {
+      part += `--${value}`;
+    }
+    diffParts.push(part);
+  }
+  if (diffParts.length === 0) {
+    return;
+  }
+  diffParts.sort();
+  const abbreviatedBagParam = diffParts.join(".") + "..en";
+  if (defaultLetters.size === 0) {
+    return fullBagParam;
+  }
+  if (abbreviatedBagParam.length < fullBagParam.length) {
+    return abbreviatedBagParam;
+  }
+  return fullBagParam;
+}
+function gameParamsFromSettings(settings) {
+  const params = new URLSearchParams;
+  const defaults = new Settings;
+  params.set("v", settings.version);
+  if (!playersEqual(settings.players, defaults.players)) {
+    settings.players.forEach((p, index) => {
+      params.set(`p${index + 1}n`, p.name);
+    });
+  }
+  if (!arraysEqual(settings.boardLayout, defaults.boardLayout, false)) {
+    params.set("board", settings.boardLayout.join("-"));
+  }
+  if (settings.bingoBonus !== defaults.bingoBonus) {
+    params.set("bingo", String(settings.bingoBonus));
+  }
+  const bagParam = getBagParam(settings, defaults);
+  if (bagParam) {
+    params.set("bag", bagParam);
+  }
+  if (settings.rackCapacity !== defaults.rackCapacity) {
+    params.set("racksize", String(settings.rackCapacity));
+  }
+  if (settings.tileSystemType === "honor") {
+    params.set("seed", settings.tileSystemSettings.seed);
+  }
+  if (settings.dictionaryType !== defaults.dictionaryType) {
+    params.set("dt", settings.dictionaryType);
+  }
+  if (typeof settings.dictionarySettings === "string") {
+    params.set("ds", settings.dictionarySettings);
+  }
+  return params;
+}
+function parseGameParams(allParams) {
+  const gameParams = new URLSearchParams;
+  const turnParams = new URLSearchParams;
+  for (const [name, value] of allParams) {
+    if (turnParams.size || name === "tn") {
+      turnParams.append(name, value);
+    } else {
+      gameParams.append(name, value);
+    }
+  }
+  const settings = new Settings;
+  const vParam = gameParams.get("v");
+  if (vParam && vParam !== settings.version) {
+    throw new UrlError(`Protocol version not supported: ${vParam}`);
+  }
+  const gidParam = gameParams.get("gid");
+  if (gidParam)
+    settings.gameId = toGameId(gidParam);
+  const newPlayers = [];
+  for (let playerNumber = 1;; ++playerNumber) {
+    const pnParam = gameParams.get(`p${playerNumber}n`);
+    if (!pnParam)
+      break;
+    newPlayers.push(new Player({ id: String(playerNumber), name: pnParam.slice(0, settings.maxPlayerNameLength) }));
+  }
+  if (newPlayers.length)
+    settings.players = newPlayers;
+  const bagParam = gameParams.get("bag");
+  if (bagParam)
+    parseBagParam(settings, bagParam);
+  const boardParam = gameParams.get("board");
+  if (boardParam)
+    settings.boardLayout = boardParam.split("-");
+  const bingoParam = gameParams.get("bingo");
+  if (bingoParam)
+    settings.bingoBonus = parseInt(bingoParam, 10);
+  const racksizeParam = gameParams.get("racksize");
+  if (racksizeParam)
+    settings.rackCapacity = parseInt(racksizeParam, 10);
+  const seedParam = gameParams.get("seed");
+  if (!seedParam)
+    throw new UrlError("No random seed in URL.");
+  settings.tileSystemSettings = { seed: seedParam };
+  const dtParam = gameParams.get("dt");
+  if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
+    settings.dictionaryType = dtParam;
+  } else if (dtParam) {
+    throw new UrlError(`Unknown dictionary type: "${dtParam}".`);
+  }
+  const dsParam = gameParams.get("ds");
+  if (dsParam)
+    settings.dictionarySettings = dsParam;
+  else if (settings.dictionaryType === "custom") {
+    throw new UrlError("Custom dictionary requires a URL.");
+  }
+  let playerId = gameParams.get("pid") ?? undefined;
+  if (!playerId) {
+    const urlTurnNumber = parseInt(turnParams.get("tn"), 10) || 1;
+    const turnNumber = toTurnNumber(urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length);
+    playerId = getPlayerForTurnNumber(settings.players, turnNumber).id;
+    console.log(`Joining as Player ${playerId}.`);
+  }
+  return { settings, playerId, turnParams };
+}
+function playersEqual(ps1, ps2) {
+  if (ps1.length !== ps2.length)
+    return false;
+  for (const index in ps1) {
+    if (!ps1[index].equals(ps2[index]))
+      return false;
+  }
+  return true;
+}
+function parseBagParam(settings, bagParam) {
+  const urlToLetter = (s) => s === "_" ? "" : s;
+  const letterCounts = new Map;
+  const letterValues = new Map;
+  const iterator = bagParam.split(".")[Symbol.iterator]();
+  for (const letterConfig of iterator) {
+    if (letterConfig === "") {
+      const rest = [...iterator].join(".");
+      if (rest !== "en") {
+        throw new UrlError(`Invalid tile distribution specifier: ${rest}`);
+      }
+      for (const [letter2, count2] of settings.letterCounts) {
+        if (!letterCounts.has(letter2)) {
+          letterCounts.set(letter2, count2);
+          letterValues.set(letter2, settings.letterValues.get(letter2));
+        }
+      }
+      break;
+    }
+    const match = letterConfig.match(/^(?<letter>.)(?:-(?<count>(?:\d+$|\d*))(?:-(?<value>\d+))?)?$/u);
+    if (!match) {
+      throw new UrlError(`Invalid letter configuration in URL: ${letterConfig}`);
+    }
+    const g = match.groups;
+    const letter = urlToLetter(g.letter);
+    const count = g.count ? parseInt(g.count, 10) : settings.letterCounts.get(letter) ?? 1;
+    const value = g.value ? parseInt(g.value, 10) : settings.letterValues.get(letter) ?? 1;
+    letterCounts.set(letter, count);
+    letterValues.set(letter, value);
+  }
+  settings.letterCounts = letterCounts;
+  settings.letterValues = letterValues;
 }
 
 // game/board.ts
@@ -1345,13 +1565,6 @@ async function checkWord(wordToCheck, dictionaryType, dictionarySettings) {
 }
 
 // game/shared_state.ts
-class UrlError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "UrlError";
-  }
-}
-
 class SharedState {
   settings;
   gameId;
@@ -1492,7 +1705,7 @@ class SharedState {
             if (!match2) {
               throw new UrlError(`Invalid "bt" parameter component: "${s}"`);
             }
-            const index = parseInt(match2[1]);
+            const index = parseInt(match2[1], 10);
             if (index in blankTileAssignments) {
               throw new UrlError(`Duplicate blank tile assignment index: bt=${blankTileIndicesStr}`);
             }
@@ -1507,10 +1720,10 @@ class SharedState {
         if (!match) {
           throw new UrlError(`Invalid "wl" parameter: "${wordLocationStr}"`);
         }
-        let row = parseInt(match[1]);
-        let col = parseInt(match[2]);
+        let row = parseInt(match[1], 10);
+        let col = parseInt(match[2], 10);
         const placements = [];
-        wordPlayed.split("").map((letter, letterIndex) => {
+        Array.from(wordPlayed).map((letter, letterIndex) => {
           const square = this.board.squares[row]?.[col];
           if (!square)
             throw new UrlError(`Attempted to play a word out of bounds: ${row},${col}.`);
@@ -1519,7 +1732,7 @@ class SharedState {
             if (assignedLetter) {
               placements.push({ tile: new Tile({ letter: "", value: 0 }), row, col, assignedLetter });
             } else {
-              const value = this.settings.letterValues[letter];
+              const value = this.settings.letterValues.get(letter);
               if (value === undefined)
                 throw new UrlError(`Attempt to play an invalid letter: "${letter}"`);
               placements.push({ tile: new Tile({ letter, value }), row, col });
@@ -1545,7 +1758,7 @@ class SharedState {
         const numberOfTilesInRack = this.tilesState.countTiles(playerId);
         const exchangeTileIndices = [];
         exchangeIndexStrs.forEach((s) => {
-          const index = parseInt(s);
+          const index = parseInt(s, 10);
           if (isNaN(index) || index < 0 || index >= numberOfTilesInRack) {
             throw new UrlError(`Invalid exchange tile index: "${s}"`);
           }
@@ -1565,7 +1778,7 @@ class SharedState {
     for (const [key, value] of params) {
       const pnMatch = key.match(/^p(\d+)n$/);
       if (pnMatch) {
-        const playerIndex = parseInt(pnMatch[1]) - 1;
+        const playerIndex = parseInt(pnMatch[1], 10) - 1;
         const player = this.players[playerIndex];
         if (player) {
           player.name = value;
@@ -1626,115 +1839,6 @@ class SharedState {
     return new SharedState(settings, json.gameId, Board.fromJSON(json.board), rehydrateTilesState(settings.tileSystemType, json.tilesState), toTurnNumber(json.nextTurnNumber));
   }
 }
-function gameParamsFromSettings(settings) {
-  const params = new URLSearchParams;
-  const defaults = new Settings;
-  params.set("v", settings.version);
-  if (!playersEqual(settings.players, defaults.players)) {
-    settings.players.forEach((p, index) => {
-      params.set(`p${index + 1}n`, p.name);
-    });
-  }
-  if (!arraysEqual(settings.boardLayout, defaults.boardLayout, false)) {
-    params.set("board", settings.boardLayout.join("-"));
-  }
-  if (settings.bingoBonus !== defaults.bingoBonus) {
-    params.set("bingo", String(settings.bingoBonus));
-  }
-  if (!(objectsEqual(settings.letterCounts, defaults.letterCounts) && objectsEqual(settings.letterValues, defaults.letterValues))) {
-    const bagParam = Object.entries(settings.letterCounts).map(([letter, count]) => `${letter}-${count}-${settings.letterValues[letter] ?? 0}`).join(".");
-    params.set("bag", bagParam);
-  }
-  if (settings.rackCapacity !== defaults.rackCapacity) {
-    params.set("racksize", String(settings.rackCapacity));
-  }
-  if (settings.tileSystemType === "honor") {
-    params.set("seed", settings.tileSystemSettings.seed);
-  }
-  if (settings.dictionaryType !== defaults.dictionaryType) {
-    params.set("dt", settings.dictionaryType);
-  }
-  if (typeof settings.dictionarySettings === "string") {
-    params.set("ds", settings.dictionarySettings);
-  }
-  return params;
-}
-async function parseGameParams(allParams) {
-  const gameParams = new URLSearchParams;
-  const turnParams = new URLSearchParams;
-  for (const [name, value] of allParams) {
-    if (turnParams.size || name === "tn") {
-      turnParams.append(name, value);
-    } else {
-      gameParams.append(name, value);
-    }
-  }
-  const settings = new Settings;
-  const vParam = gameParams.get("v");
-  if (vParam && vParam !== settings.version) {
-    throw new Error(`Protocol version not supported: ${vParam}`);
-  }
-  const gidParam = gameParams.get("gid");
-  if (gidParam)
-    settings.gameId = toGameId(gidParam);
-  const newPlayers = [];
-  for (let playerNumber = 1;; ++playerNumber) {
-    const pnParam = gameParams.get(`p${playerNumber}n`);
-    if (!pnParam)
-      break;
-    newPlayers.push(new Player({ id: String(playerNumber), name: pnParam.slice(0, settings.maxPlayerNameLength) }));
-  }
-  if (newPlayers.length)
-    settings.players = newPlayers;
-  const bagParam = gameParams.get("bag");
-  if (bagParam) {
-    const letterCounts = {};
-    const letterValues = {};
-    bagParam.split(".").map((letterCountAndValue) => {
-      if (!letterCountAndValue.match(/^(.*)-(\d+)-(\d+)$/)) {
-        throw new Error(`Invalid letter configuration in URL: ${letterCountAndValue}`);
-      }
-      const parts = letterCountAndValue.split("-");
-      letterCounts[parts[0]] = parseInt(parts[1]);
-      letterValues[parts[0]] = parseInt(parts[2]);
-    });
-    settings.letterCounts = letterCounts;
-    settings.letterValues = letterValues;
-  }
-  const boardParam = gameParams.get("board");
-  if (boardParam)
-    settings.boardLayout = boardParam.split("-");
-  const bingoParam = gameParams.get("bingo");
-  if (bingoParam)
-    settings.bingoBonus = parseInt(bingoParam);
-  const racksizeParam = gameParams.get("racksize");
-  if (racksizeParam)
-    settings.rackCapacity = parseInt(racksizeParam);
-  const seedParam = gameParams.get("seed");
-  if (!seedParam)
-    throw new Error("No random seed in URL.");
-  settings.tileSystemSettings = { seed: seedParam };
-  const dtParam = gameParams.get("dt");
-  if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
-    settings.dictionaryType = dtParam;
-  } else if (dtParam) {
-    throw new Error(`Unknown dictionary type: "${dtParam}".`);
-  }
-  const dsParam = gameParams.get("ds");
-  if (dsParam)
-    settings.dictionarySettings = dsParam;
-  else if (settings.dictionaryType === "custom") {
-    throw new Error("Custom dictionary requires a URL.");
-  }
-  let playerId = gameParams.get("pid") ?? undefined;
-  if (!playerId) {
-    const urlTurnNumber = parseInt(turnParams.get("tn")) || 1;
-    const turnNumber = toTurnNumber(urlTurnNumber + turnParams.getAll("wl").length + turnParams.getAll("ex").length);
-    playerId = getPlayerForTurnNumber(settings.players, turnNumber).id;
-    console.log(`Joining as Player ${playerId}.`);
-  }
-  return { settings, playerId, turnParams };
-}
 function makeTilesState(settings) {
   if (settings.tileSystemType === "honor") {
     return new HonorSystemTilesState(settings.players, settings.tileSystemSettings, makeTiles(settings), settings.rackCapacity);
@@ -1745,18 +1849,6 @@ function rehydrateTilesState(tileSystemType, tilesStateJson) {
   if (tileSystemType === "honor")
     return HonorSystemTilesState.fromJSON(tilesStateJson);
   throw new TypeError(`Unknown tileSystemType: ${tileSystemType}`);
-}
-function playersEqual(ps1, ps2) {
-  if (ps1.length !== ps2.length)
-    return false;
-  for (const index in ps1) {
-    if (!ps1[index].equals(ps2[index]))
-      return false;
-  }
-  return true;
-}
-function getPlayerForTurnNumber(players, turnNumber) {
-  return players[(fromTurnNumber(turnNumber) - 1) % players.length];
 }
 
 // game/game_state.ts
@@ -2113,7 +2205,7 @@ class GameState extends EventTarget {
     await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
   static async fromParams(params) {
-    const { settings, playerId, turnParams } = await parseGameParams(params);
+    const { settings, playerId, turnParams } = parseGameParams(params);
     const gameState = new GameState(playerId, settings);
     await gameState.init();
     await gameState.applyTurnParams(turnParams);
