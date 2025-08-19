@@ -2979,9 +2979,7 @@ class PointerHandler {
       downY: evt.clientY,
       x: evt.clientX,
       y: evt.clientY,
-      pointerMoved: false,
-      isPanning: false,
-      draggingTile: null
+      pointerMoved: false
     };
     const tileTarget = target.closest(".tile, .placed");
     if (tileTarget instanceof HTMLElement) {
@@ -2996,31 +2994,26 @@ class PointerHandler {
         ghostTile: null
       };
       this.pointerInfoMap.set(evt.pointerId, dragInfo);
-    } else {
-      const board = target.closest("#board-container");
-      if (board) {
-        evt.preventDefault();
-        evt.stopPropagation();
-        const panInfo = {
-          ...tapInfo,
-          isPanning: true
-        };
-        this.pointerInfoMap.set(evt.pointerId, panInfo);
-      }
+    } else if (target.closest("#board-container")) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const panInfo = {
+        ...tapInfo,
+        draggingTile: null
+      };
+      this.pointerInfoMap.set(evt.pointerId, panInfo);
     }
   }
   pointerMove(evt) {
     const info = this.pointerInfoMap.get(evt.pointerId);
     if (!info)
       return;
+    evt.preventDefault();
     if (!info.pointerMoved && Math.hypot(evt.clientX - info.downX, evt.clientY - info.downY) > 5) {
       info.pointerMoved = true;
     }
-    if (info.isPanning || info.draggingTile) {
-      evt.preventDefault();
-    }
-    if (info.isPanning) {
-      const panningPointerInfos = [...this.pointerInfoMap.values().filter((anyInfo) => anyInfo.isPanning)];
+    if (!info.draggingTile) {
+      const panningPointerInfos = [...this.pointerInfoMap.values().filter((anyInfo) => !anyInfo.draggingTile)];
       const panningPointerCount = panningPointerInfos.length;
       const midpointBefore = panningPointerInfos.reduce((sum, curr) => {
         return {
@@ -3086,7 +3079,7 @@ class PointerHandler {
     if (!info)
       return;
     const target = evt.target;
-    if (!info.isPanning && info.draggingTile && info.ghostTile) {
+    if (info.draggingTile && info.ghostTile) {
       const dropTarget = this.view.getDropTarget(evt.pointerId);
       if (dropTarget) {
         try {
