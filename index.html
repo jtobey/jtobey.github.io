@@ -2945,14 +2945,23 @@ class PointerHandler {
     this.gameState = gameState;
     this.view = view;
   }
+  scrollWindowBy(dx, dy) {
+    window.scrollBy(dx, dy);
+  }
   updateTransform() {
     this.scale = Math.max(1, Math.min(4, this.scale));
     const boardRect = this.view.getBoardContainer().getBoundingClientRect();
     const maxPanX = (this.scale * boardRect.width - boardRect.width) / this.scale;
     const maxPanY = (this.scale * boardRect.height - boardRect.height) / this.scale;
+    const oldPanX = this.panX;
+    const oldPanY = this.panY;
     this.panX = Math.max(-maxPanX, Math.min(0, this.panX));
     this.panY = Math.max(-maxPanY, Math.min(0, this.panY));
     this.view.setBoardTransform(this.scale, this.panX, this.panY);
+    return {
+      overshootX: oldPanX - this.panX,
+      overshootY: oldPanY - this.panY
+    };
   }
   pointerCancel(evt) {
     const info = this.pointerInfoMap.get(evt.pointerId);
@@ -2990,22 +2999,13 @@ class PointerHandler {
     } else {
       const board = target.closest("#board-container");
       if (board) {
-        const other = this.pointerInfoMap.values().find((info) => !info.isPanning && !info.draggingTile);
-        if (this.scale > 1 || other) {
-          evt.preventDefault();
-          evt.stopPropagation();
-          const panInfo = {
-            ...tapInfo,
-            isPanning: true
-          };
-          this.pointerInfoMap.set(evt.pointerId, panInfo);
-          if (other) {
-            const otherPanInfo = other;
-            otherPanInfo.isPanning = true;
-          }
-        } else {
-          this.pointerInfoMap.set(evt.pointerId, tapInfo);
-        }
+        evt.preventDefault();
+        evt.stopPropagation();
+        const panInfo = {
+          ...tapInfo,
+          isPanning: true
+        };
+        this.pointerInfoMap.set(evt.pointerId, panInfo);
       }
     }
   }
@@ -3052,7 +3052,10 @@ class PointerHandler {
       }
       this.panX += (midpointAfter.x - midpointBefore.x) / this.scale;
       this.panY += (midpointAfter.y - midpointBefore.y) / this.scale;
-      this.updateTransform();
+      const { overshootX, overshootY } = this.updateTransform();
+      if (panningPointerCount === 1) {
+        this.scrollWindowBy(-overshootX * this.scale, -overshootY * this.scale);
+      }
     } else if (info.draggingTile && info.pointerMoved) {
       if (!info.ghostTile) {
         info.ghostTile = this.view.createGhostTile(info.draggingTile.element);
@@ -3233,6 +3236,19 @@ class DomBrowser {
   setLocalStorageItem(key, value) {
     localStorage.setItem(key, value);
   }
+  removeLocalStorageItem(key) {
+    localStorage.removeItem(key);
+  }
+  getAllLocalStorageKeys() {
+    const keys = [];
+    for (let i = 0;i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  }
   getDocument() {
     return document;
   }
@@ -3288,8 +3304,90 @@ class App {
     const gid = this.gameState.gameId;
     if (gid) {
       const game = this.gameState.toJSON();
-      this.browser.setLocalStorageItem(makeStorageKey(gid), JSON.stringify({ game, ts: Date.now() }));
+      const key = makeStorageKey(gid);
+      const value = JSON.stringify({ game, ts: Date.now() });
+      try {
+        this.browser.setLocalStorageItem(key, value);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "QuotaExceededError") {
+          console.warn("Local storage quota exceeded. Attempting to free space.");
+          this.freeStorageAndRetrySave(key, value);
+        } else {
+          throw e;
+        }
+      }
     }
+  }
+  async freeStorageAndRetrySave(key, value) {
+    const savedGames = [];
+    const keys = this.browser.getAllLocalStorageKeys();
+    for (const storageKey of keys) {
+      if (!storageKey.startsWith("sharewords_"))
+        continue;
+      const item = this.browser.getLocalStorageItem(storageKey);
+      if (!item)
+        continue;
+      try {
+        const data = JSON.parse(item);
+        if (typeof data.game !== "object" || typeof data.ts !== "number")
+          continue;
+        const gameState = GameState.fromJSON(data.game);
+        const gameId = storageKey.substring("sharewords_".length);
+        savedGames.push({
+          gameId,
+          ts: data.ts,
+          isGameOver: gameState.isGameOver
+        });
+      } catch (e) {
+        console.warn(`Could not parse saved game from ${storageKey}, removing it.`, e);
+        this.browser.removeLocalStorageItem(storageKey);
+      }
+    }
+    const completedGames = savedGames.filter((g) => g.isGameOver).sort((a, b) => a.ts - b.ts);
+    const activeGames = savedGames.filter((g) => !g.isGameOver).sort((a, b) => a.ts - b.ts);
+    for (const game of completedGames) {
+      console.log(`Deleting completed game ${game.gameId} to free up space.`);
+      this.deleteGame(game.gameId);
+      try {
+        this.browser.setLocalStorageItem(key, value);
+        console.log("Successfully saved game state after freeing space.");
+        return;
+      } catch (e) {
+        if (!(e instanceof DOMException && e.name === "QuotaExceededError")) {
+          throw e;
+        }
+      }
+    }
+    if (activeGames.length > 0) {
+      const content = this.browser.getDocument().createElement("div");
+      content.innerHTML = `<p>There is not enough space to save your game.</p>
+        <p>Would you like to delete active (unfinished) game(s) to free up space? The oldest games will be deleted first.</p>`;
+      const dialog = new Dialog(this.browser.getDocument(), "Delete Active Games?", content, ["Delete", "Cancel"]);
+      const result = await dialog.show();
+      if (result === "Delete") {
+        for (const game of activeGames) {
+          console.log(`Deleting active game ${game.gameId} to free up space.`);
+          this.deleteGame(game.gameId);
+          try {
+            this.browser.setLocalStorageItem(key, value);
+            console.log("Successfully saved game state after freeing space.");
+            return;
+          } catch (e) {
+            if (!(e instanceof DOMException && e.name === "QuotaExceededError")) {
+              throw e;
+            }
+          }
+        }
+      }
+    }
+    console.error("Could not save game state, even after trying to free space.");
+    const errorContent = this.browser.getDocument().createElement("div");
+    errorContent.innerHTML = `<p>Could not save game. All attempts to free up space have failed.</p>`;
+    const errorDialog = new Dialog(this.browser.getDocument(), "Save Failed", errorContent, ["OK"]);
+    await errorDialog.show();
+  }
+  deleteGame(gameId) {
+    this.browser.removeLocalStorageItem(makeStorageKey(gameId));
   }
   async init() {
     if (this.browser.getURLSearchParams(this.browser.getSearch()).has("debug")) {
