@@ -21,8 +21,6 @@
 
 #board-transformer {
   display: grid;
-  grid-template-columns: repeat(15, 40px);
-  grid-template-rows: repeat(15, 40px);
   transform-origin: 0 0;
   background-color: #ccc;
   width: 100%;
@@ -38,15 +36,14 @@
   border-right: 1px solid #ccc;
   justify-content: center;
   align-items:  center;
-  width: 40px;
-  height: 40px;
-  font-size: 24px;
+  width: auto;
+  height: auto;
 }
 
 .bonus-text {
   color: #dda;
   font-family: sans-serif;
-  font-size: 18px;
+  font-size: .75em;
 }
 
 #controls-container {
@@ -200,11 +197,6 @@
   #board-container {
     width: 98vw;
     height: 98vw;
-  }
-
-  #board-transformer {
-    grid-template-columns: repeat(15, 1fr);
-    grid-template-rows: repeat(15, 1fr);
   }
 
   .square {
@@ -2566,6 +2558,14 @@ class View {
   }
   renderBoard() {
     this.boardTransformer.innerHTML = "";
+    const dimension = this.gameState.board.squares.length;
+    this.boardTransformer.style.gridTemplateColumns = `repeat(${dimension}, 1fr)`;
+    this.boardTransformer.style.gridTemplateRows = `repeat(${dimension}, 1fr)`;
+    const baseSquareSize = 40;
+    const baseFontSize = 24;
+    const squareSize = 601 / dimension;
+    const fontSize = squareSize / baseSquareSize * baseFontSize;
+    this.boardTransformer.style.fontSize = `${fontSize}px`;
     const centerSquare = this.gameState.board.centerSquare;
     for (let r = 0;r < this.gameState.board.squares.length; r++) {
       const row = this.gameState.board.squares[r];
