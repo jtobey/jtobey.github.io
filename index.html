@@ -3233,19 +3233,6 @@ class DomBrowser {
   setLocalStorageItem(key, value) {
     localStorage.setItem(key, value);
   }
-  removeLocalStorageItem(key) {
-    localStorage.removeItem(key);
-  }
-  getAllLocalStorageKeys() {
-    const keys = [];
-    for (let i = 0;i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key) {
-        keys.push(key);
-      }
-    }
-    return keys;
-  }
   getDocument() {
     return document;
   }
@@ -3305,88 +3292,8 @@ class App {
       const ts = Date.now();
       const key = makeStorageKey(gid);
       const value = JSON.stringify({ game, ts, ver });
-      try {
-        this.browser.setLocalStorageItem(key, value);
-      } catch (e) {
-        if (e instanceof DOMException && e.name === "QuotaExceededError") {
-          console.warn("Local storage quota exceeded. Attempting to free space.");
-          this.freeStorageAndRetrySave(key, value);
-        } else {
-          throw e;
-        }
-      }
+      this.browser.setLocalStorageItem(key, value);
     }
-  }
-  async freeStorageAndRetrySave(key, value) {
-    const savedGames = [];
-    const keys = this.browser.getAllLocalStorageKeys();
-    for (const storageKey of keys) {
-      if (!storageKey.startsWith("sharewords_"))
-        continue;
-      const item = this.browser.getLocalStorageItem(storageKey);
-      if (!item)
-        continue;
-      try {
-        const data = JSON.parse(item);
-        if (typeof data.game !== "object" || typeof data.ts !== "number")
-          continue;
-        const gameState = GameState.fromJSON(data.game);
-        const gameId = storageKey.substring("sharewords_".length);
-        savedGames.push({
-          gameId,
-          ts: data.ts,
-          isGameOver: gameState.isGameOver
-        });
-      } catch (e) {
-        console.warn(`Could not parse saved game from ${storageKey}, removing it.`, e);
-        this.browser.removeLocalStorageItem(storageKey);
-      }
-    }
-    const completedGames = savedGames.filter((g) => g.isGameOver).sort((a, b) => a.ts - b.ts);
-    const activeGames = savedGames.filter((g) => !g.isGameOver).sort((a, b) => a.ts - b.ts);
-    for (const game of completedGames) {
-      console.log(`Deleting completed game ${game.gameId} to free up space.`);
-      this.deleteGame(game.gameId);
-      try {
-        this.browser.setLocalStorageItem(key, value);
-        console.log("Successfully saved game state after freeing space.");
-        return;
-      } catch (e) {
-        if (!(e instanceof DOMException && e.name === "QuotaExceededError")) {
-          throw e;
-        }
-      }
-    }
-    if (activeGames.length > 0) {
-      const content = this.browser.getDocument().createElement("div");
-      content.innerHTML = `<p>There is not enough space to save your game.</p>
-        <p>Would you like to delete active (unfinished) game(s) to free up space? The oldest games will be deleted first.</p>`;
-      const dialog = new Dialog(this.browser.getDocument(), "Delete Active Games?", content, ["Delete", "Cancel"]);
-      const result = await dialog.show();
-      if (result === "Delete") {
-        for (const game of activeGames) {
-          console.log(`Deleting active game ${game.gameId} to free up space.`);
-          this.deleteGame(game.gameId);
-          try {
-            this.browser.setLocalStorageItem(key, value);
-            console.log("Successfully saved game state after freeing space.");
-            return;
-          } catch (e) {
-            if (!(e instanceof DOMException && e.name === "QuotaExceededError")) {
-              throw e;
-            }
-          }
-        }
-      }
-    }
-    console.error("Could not save game state, even after trying to free space.");
-    const errorContent = this.browser.getDocument().createElement("div");
-    errorContent.innerHTML = `<p>Could not save game. All attempts to free up space have failed.</p>`;
-    const errorDialog = new Dialog(this.browser.getDocument(), "Save Failed", errorContent, ["OK"]);
-    await errorDialog.show();
-  }
-  deleteGame(gameId) {
-    this.browser.removeLocalStorageItem(makeStorageKey(gameId));
   }
   async init() {
     if (this.browser.getURLSearchParams(this.browser.getSearch()).has("debug")) {
