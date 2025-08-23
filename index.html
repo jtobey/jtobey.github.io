@@ -362,14 +362,149 @@ function arraysEqual(a1, a2, warnIfNot = true) {
     console.warn(`[${a1}] does not equal [${a2}]`);
   return false;
 }
-function mapsEqual(m1, m2) {
-  if (m1.size !== m2.size)
-    return false;
-  for (const [key, val] of m1) {
-    if (!m2.has(key) || m2.get(key) !== val)
-      return false;
+
+// game/bag_defaults.ts
+var DEFAULT_BAG_LANGUAGE = "en";
+var BAG_DEFAULTS = {
+  en: {
+    name: "English",
+    letterCounts: {
+      A: 9,
+      B: 2,
+      C: 2,
+      D: 4,
+      E: 12,
+      F: 2,
+      G: 2,
+      H: 2,
+      I: 9,
+      J: 1,
+      K: 1,
+      L: 4,
+      M: 2,
+      N: 6,
+      O: 8,
+      P: 2,
+      Q: 1,
+      R: 6,
+      S: 5,
+      T: 6,
+      U: 4,
+      V: 2,
+      W: 2,
+      X: 1,
+      Y: 2,
+      Z: 1,
+      "": 2
+    },
+    letterValues: {
+      A: 1,
+      B: 3,
+      C: 4,
+      D: 2,
+      E: 1,
+      F: 4,
+      G: 3,
+      H: 4,
+      I: 1,
+      J: 9,
+      K: 5,
+      L: 1,
+      M: 3,
+      N: 1,
+      O: 1,
+      P: 3,
+      Q: 10,
+      R: 1,
+      S: 1,
+      T: 1,
+      U: 2,
+      V: 5,
+      W: 4,
+      X: 8,
+      Y: 4,
+      Z: 10,
+      "": 0
+    }
+  },
+  es: {
+    name: "Español",
+    letterCounts: {
+      A: 10,
+      B: 2,
+      C: 2,
+      D: 3,
+      E: 10,
+      F: 2,
+      G: 2,
+      H: 2,
+      I: 9,
+      J: 2,
+      K: 1,
+      L: 4,
+      M: 2,
+      N: 6,
+      Ñ: 1,
+      O: 11,
+      P: 2,
+      Qu: 2,
+      R: 5,
+      S: 5,
+      T: 4,
+      U: 4,
+      V: 2,
+      X: 1,
+      Y: 2,
+      Z: 2,
+      "": 2
+    },
+    letterValues: {
+      A: 1,
+      B: 3,
+      C: 4,
+      D: 2,
+      E: 1,
+      F: 4,
+      G: 3,
+      H: 4,
+      I: 1,
+      J: 4,
+      K: 10,
+      L: 1,
+      M: 3,
+      N: 1,
+      Ñ: 5,
+      O: 1,
+      P: 3,
+      Qu: 5,
+      R: 1,
+      S: 1,
+      T: 1,
+      U: 2,
+      V: 4,
+      X: 10,
+      Y: 4,
+      Z: 4,
+      "": 0
+    }
   }
-  return true;
+};
+function getBagLanguages() {
+  return Object.entries(BAG_DEFAULTS).map(([key, value]) => ({
+    code: key,
+    name: value.name
+  }));
+}
+function getBagDefaults(bagLanguage) {
+  let defaults = BAG_DEFAULTS[bagLanguage];
+  if (!defaults) {
+    console.warn(`Unsupported bag language "${bagLanguage}", defaulting to "${DEFAULT_BAG_LANGUAGE}".`);
+    defaults = BAG_DEFAULTS[DEFAULT_BAG_LANGUAGE];
+  }
+  return {
+    letterCounts: new Map(Object.entries(defaults.letterCounts)),
+    letterValues: new Map(Object.entries(defaults.letterValues))
+  };
 }
 
 // game/player.ts
@@ -416,69 +551,8 @@ function makeGameId(now = Date.now()) {
     id = ALPHABET[Number(n % base)] + id;
     n /= base;
   }
-  return id;
+  return toGameId(id);
 }
-var DEFAULT_PLAYER_LIST = [
-  new Player({ id: "1" }),
-  new Player({ id: "2" })
-];
-var DEFAULT_LETTER_COUNTS = new Map([
-  ["A", 9],
-  ["B", 2],
-  ["C", 2],
-  ["D", 4],
-  ["E", 12],
-  ["F", 2],
-  ["G", 2],
-  ["H", 2],
-  ["I", 9],
-  ["J", 1],
-  ["K", 1],
-  ["L", 4],
-  ["M", 2],
-  ["N", 6],
-  ["O", 8],
-  ["P", 2],
-  ["Q", 1],
-  ["R", 6],
-  ["S", 5],
-  ["T", 6],
-  ["U", 4],
-  ["V", 2],
-  ["W", 2],
-  ["X", 1],
-  ["Y", 2],
-  ["Z", 1],
-  ["", 2]
-]);
-var DEFAULT_LETTER_VALUES = new Map([
-  ["A", 1],
-  ["B", 3],
-  ["C", 4],
-  ["D", 2],
-  ["E", 1],
-  ["F", 4],
-  ["G", 3],
-  ["H", 4],
-  ["I", 1],
-  ["J", 9],
-  ["K", 5],
-  ["L", 1],
-  ["M", 3],
-  ["N", 1],
-  ["O", 1],
-  ["P", 3],
-  ["Q", 10],
-  ["R", 1],
-  ["S", 1],
-  ["T", 1],
-  ["U", 2],
-  ["V", 5],
-  ["W", 4],
-  ["X", 8],
-  ["Y", 4],
-  ["Z", 10]
-]);
 var DEFAULT_BOARD_LAYOUT = [
   "D..d..T......T.",
   ".D...D...t.t..T",
@@ -500,19 +574,26 @@ var DEFAULT_BINGO_BONUS = 42;
 var DEFAULT_RACK_CAPACITY = 7;
 
 class Settings {
+  letterCounts;
+  letterValues;
   gameId;
   version = PROTOCOL_VERSION;
-  players = DEFAULT_PLAYER_LIST.map((p) => new Player(p));
+  players = ["1", "2"].map((id) => new Player({ id }));
   maxPlayerNameLength = 50;
-  letterCounts = DEFAULT_LETTER_COUNTS;
-  letterValues = DEFAULT_LETTER_VALUES;
-  boardLayout = DEFAULT_BOARD_LAYOUT;
+  boardLayout = [...DEFAULT_BOARD_LAYOUT];
   bingoBonus = DEFAULT_BINGO_BONUS;
   rackCapacity = DEFAULT_RACK_CAPACITY;
   tileSystemType = "honor";
   tileSystemSettings = { seed: "1" };
   dictionaryType = "permissive";
   dictionarySettings = null;
+  constructor(bagDefaults, letterCounts = bagDefaults.letterCounts, letterValues = bagDefaults.letterValues) {
+    this.letterCounts = letterCounts;
+    this.letterValues = letterValues;
+  }
+  static forLanguage(bagLanguage) {
+    return new Settings(getBagDefaults(bagLanguage));
+  }
   toJSON() {
     return {
       version: this.version,
@@ -544,7 +625,7 @@ class Settings {
     ]) && json.version === PROTOCOL_VERSION && Array.isArray(json.players) && Array.isArray(json.boardLayout) && json.boardLayout.every((s) => typeof s === "string") && typeof json.bingoBonus === "number" && typeof json.rackCapacity === "number" && json.tileSystemType === "honor" && typeof json.tileSystemSettings === "object" && typeof json.tileSystemSettings.seed === "string" && ["permissive", "freeapi", "custom"].includes(json.dictionaryType))) {
       throw new TypeError(`Invalid Settings serialization: ${JSON.stringify(json)}`);
     }
-    const settings = new Settings;
+    const settings = Settings.forLanguage("en");
     settings.version = json.version;
     settings.players = json.players.map(Player.fromJSON);
     settings.letterCounts = checkLetterToNumberMap("letterCounts", json.letterCounts);
@@ -967,6 +1048,149 @@ class HonorSystemTilesState extends EventTarget {
   }
 }
 
+// i18n.ts
+var {readFileSync} = (() => ({}));
+// i18n/en.json
+var en_default = {
+  error: {
+    word_placement: {
+      no_tiles: "Drag some tiles onto the board, and try again.",
+      blank_tiles_must_be_assigned_letters: "Blank tiles must be assigned letters.",
+      non_blank_tiles_cannot_be_assigned_letters: "Non-blank tiles cannot be assigned letters.",
+      tiles_not_in_line: "Tiles are not in a line.",
+      square_occupied: "Square ${row},${col} is occupied.",
+      line_with_gaps: "Tiles form a line with gaps between them.",
+      no_single_letter_words: "No single-letter words accepted.",
+      must_connect_to_existing: "Tiles must connect to existing words or cover the center square."
+    },
+    play_rejected: {
+      not_words_in_dictionary: "Not words in ${dictionaryName}: ${invalidWords}.",
+      play_rejected: "${message} Play rejected.",
+      word_not_in_dictionary: 'Word "${word}" ${status} in ${dictionaryName}.',
+      status: {
+        not_found: "not found",
+        has_no_definition: "has no definition"
+      }
+    },
+    url: {
+      protocol_not_supported: "Protocol version not supported: ${version}",
+      no_random_seed: "No random seed in URL.",
+      unknown_dictionary_type: 'Unknown dictionary type: "${type}".',
+      custom_dictionary_requires_url: "Custom dictionary requires a URL.",
+      invalid_tile_distribution: "Invalid tile distribution specifier: ${specifier}",
+      invalid_letter_config: "Invalid letter configuration in URL: ${config}",
+      tn_not_a_number: '"tn" param is not a turn number: "${param}"',
+      both_word_and_exchange: "Found both word and exchange data for turn ${turnNumber}.",
+      invalid_bt_component: 'Invalid "bt" parameter component: "${component}"',
+      duplicate_bt_index: "Duplicate blank tile assignment index: bt=${param}",
+      bt_index_out_of_range: 'Blank tile assignment index out of range: no "${word}"[${index}].',
+      invalid_wl_param: 'Invalid "wl" parameter: "${param}"',
+      word_out_of_bounds: "Attempted to play a word out of bounds: ${row},${col}.",
+      wrong_letter: 'Word requires "${requiredLetter}" at ${row},${col}, but "${actualLetter}" is there.',
+      invalid_letter: 'Attempt to play an invalid letter: "${letter}"',
+      bt_index_range: '"bt" parameter has index ${index} out of range 0-${maxIndex}.',
+      incomplete_turn_data: "Incomplete data for turn ${turnNumber}: wl=${wl} ${direction}=${word} bt=${bt}",
+      invalid_exchange_index: 'Invalid exchange tile index: "${index}"',
+      invalid_player_id: 'Invalid turn URL: Player ID "${id}" should be in 1-${maxId}.',
+      duplicate_bt_param: 'Duplicate "bt" parameter for turn ${turnNumber}.',
+      duplicate_word_params: "Duplicate word parameters for turn ${turnNumber}.",
+      unrecognized_param: 'Unrecognized parameter name: "${param}"'
+    }
+  },
+  ui: {
+    title: "Crossword Builder",
+    buttons: {
+      play_word: "Play Word",
+      pass_turn: "Pass Turn",
+      exchange_count: "Exchange ${count}",
+      recall_tiles: "Recall Tiles",
+      game_setup: "Game Setup",
+      add_player: "Add Player",
+      remove_player: "-",
+      start_game_with_settings: "Start Game with Settings",
+      cancel_settings: "Cancel",
+      ok: "OK"
+    },
+    settings: {
+      players: "Players",
+      dictionary: "Dictionary",
+      dictionary_options: {
+        permissive: "Anything is a word",
+        freeapi: "freeapi",
+        custom: "custom"
+      },
+      dictionary_url_label: "URL:",
+      bingo_bonus: "Bingo Bonus",
+      random_seed: "Random Seed",
+      player_placeholder: "Player ${index}"
+    },
+    bag_tile_count: "Tiles in bag: ${count}",
+    dialog: {
+      copy_turn_url: "Copy Turn URL?",
+      confirm_title: "Confirm"
+    },
+    game: {
+      join_link: "join"
+    }
+  }
+};
+
+// i18n.ts
+var [DEFAULT_LANG, DEFAULT_TRANSLATIONS] = ["en", en_default];
+var translations = {};
+async function loadTranslations(...languages) {
+  for (const lang of languages) {
+    if (lang === DEFAULT_LANG) {
+      translations = DEFAULT_TRANSLATIONS;
+      return;
+    }
+    try {
+      if (typeof window !== "undefined" && typeof window.fetch === "function") {
+        const response = await fetch(`i18n/${lang}.json`);
+        if (!response.ok) {
+          console.warn(`Language '${lang}' not supported.`);
+        } else {
+          translations = await response.json();
+          return;
+        }
+      } else {
+        const path = `i18n/${lang}.json`;
+        try {
+          const data = readFileSync(path, "utf-8");
+          translations = JSON.parse(data);
+          return;
+        } catch (error) {
+          console.warn(`Language '${lang}' not supported.`);
+        }
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  console.warn(`Configured languages not supported. Falling back to ${DEFAULT_LANG}.`);
+  translations = DEFAULT_TRANSLATIONS;
+}
+function t(key, params) {
+  const keys = key.split(".");
+  let value = translations;
+  for (const k of keys) {
+    if (value && typeof value === "object" && k in value) {
+      value = value[k];
+    } else {
+      return key;
+    }
+  }
+  if (typeof value === "string") {
+    if (params) {
+      return value.replace(/\$\{(\w+)\}/g, (_, placeholder) => {
+        return params[placeholder] !== undefined ? String(params[placeholder]) : `{${placeholder}}`;
+      });
+    }
+    return value;
+  }
+  return key;
+}
+
 // game/game_params.ts
 class UrlError extends Error {
   constructor(message) {
@@ -974,63 +1198,57 @@ class UrlError extends Error {
     this.name = "UrlError";
   }
 }
-function getBagParam(settings, defaults) {
+function getBagParam(settings) {
   const letterToUrl = (l) => l === "" ? "_" : l;
-  if (mapsEqual(settings.letterCounts, defaults.letterCounts) && mapsEqual(settings.letterValues, defaults.letterValues)) {
-    return;
-  }
-  const fullBagParam = [...settings.letterCounts.entries()].map(([letter, count]) => `${letterToUrl(letter)}-${count}-${settings.letterValues.get(letter) ?? 0}`).join(".");
-  const settingsLetters = new Set(settings.letterCounts.keys());
-  const defaultLetters = new Set(defaults.letterCounts.keys());
-  const diffParts = [];
-  for (const letter of settingsLetters) {
-    if (!defaultLetters.has(letter)) {
+  let bagParam = [...settings.letterCounts.entries()].map(([letter, count]) => `${letterToUrl(letter)}-${count}-${settings.letterValues.get(letter) ?? 0}`).join(".");
+  for (const { code: bagLanguage } of getBagLanguages()) {
+    const defaults = getBagDefaults(bagLanguage);
+    const settingsLetters = new Set(settings.letterCounts.keys());
+    const defaultLetters = new Set(defaults.letterCounts.keys());
+    const diffParts = [];
+    for (const letter of settingsLetters) {
+      if (!defaultLetters.has(letter)) {
+        const count = settings.letterCounts.get(letter);
+        const value = settings.letterValues.get(letter) ?? 0;
+        diffParts.push(`${letterToUrl(letter)}-${count}-${value}`);
+      }
+    }
+    for (const letter of defaultLetters) {
+      const settingsHasLetter = settingsLetters.has(letter);
       const count = settings.letterCounts.get(letter);
-      const value = settings.letterValues.get(letter) ?? 0;
-      diffParts.push(`${letterToUrl(letter)}-${count}-${value}`);
+      const value = settings.letterValues.get(letter);
+      const defaultCount = defaults.letterCounts.get(letter);
+      const defaultValue = defaults.letterValues.get(letter);
+      if (settingsHasLetter && count === defaultCount && value === defaultValue) {
+        continue;
+      }
+      if (!settingsHasLetter) {
+        diffParts.push(`${letterToUrl(letter)}-0`);
+        continue;
+      }
+      let part = letterToUrl(letter);
+      const countIsDefault = count === defaultCount;
+      const valueIsDefault = value === defaultValue;
+      if (!countIsDefault && !valueIsDefault) {
+        part += `-${count}-${value}`;
+      } else if (!countIsDefault) {
+        part += `-${count}`;
+      } else if (count !== 0) {
+        part += `--${value}`;
+      }
+      diffParts.push(part);
+    }
+    diffParts.sort();
+    const abbreviatedBagParam = [...diffParts, `.${bagLanguage}`].join(".");
+    if (abbreviatedBagParam.length < bagParam.length) {
+      bagParam = abbreviatedBagParam;
     }
   }
-  for (const letter of defaultLetters) {
-    const settingsHasLetter = settingsLetters.has(letter);
-    const count = settings.letterCounts.get(letter);
-    const value = settings.letterValues.get(letter);
-    const defaultCount = defaults.letterCounts.get(letter);
-    const defaultValue = defaults.letterValues.get(letter);
-    if (settingsHasLetter && count === defaultCount && value === defaultValue) {
-      continue;
-    }
-    if (!settingsHasLetter) {
-      diffParts.push(`${letterToUrl(letter)}-0`);
-      continue;
-    }
-    let part = letterToUrl(letter);
-    const countIsDefault = count === defaultCount;
-    const valueIsDefault = value === defaultValue;
-    if (!countIsDefault && !valueIsDefault) {
-      part += `-${count}-${value}`;
-    } else if (!countIsDefault) {
-      part += `-${count}`;
-    } else {
-      part += `--${value}`;
-    }
-    diffParts.push(part);
-  }
-  if (diffParts.length === 0) {
-    return;
-  }
-  diffParts.sort();
-  const abbreviatedBagParam = diffParts.join(".") + "..en";
-  if (defaultLetters.size === 0) {
-    return fullBagParam;
-  }
-  if (abbreviatedBagParam.length < fullBagParam.length) {
-    return abbreviatedBagParam;
-  }
-  return fullBagParam;
+  return bagParam;
 }
 function gameParamsFromSettings(settings) {
   const params = new URLSearchParams;
-  const defaults = new Settings;
+  const defaults = Settings.forLanguage("en");
   params.set("v", settings.version);
   if (!playersEqual(settings.players, defaults.players)) {
     settings.players.forEach((p, index) => {
@@ -1043,7 +1261,7 @@ function gameParamsFromSettings(settings) {
   if (settings.bingoBonus !== defaults.bingoBonus) {
     params.set("bingo", String(settings.bingoBonus));
   }
-  const bagParam = getBagParam(settings, defaults);
+  const bagParam = getBagParam(settings);
   if (bagParam) {
     params.set("bag", bagParam);
   }
@@ -1071,10 +1289,10 @@ function parseGameParams(allParams) {
       gameParams.append(name, value);
     }
   }
-  const settings = new Settings;
+  const settings = Settings.forLanguage("en");
   const vParam = gameParams.get("v");
   if (vParam && vParam !== settings.version) {
-    throw new UrlError(`Protocol version not supported: ${vParam}`);
+    throw new UrlError(t("error.url.protocol_not_supported", { version: vParam }));
   }
   const gidParam = gameParams.get("gid");
   if (gidParam)
@@ -1102,19 +1320,19 @@ function parseGameParams(allParams) {
     settings.rackCapacity = parseInt(racksizeParam, 10);
   const seedParam = gameParams.get("seed");
   if (!seedParam)
-    throw new UrlError("No random seed in URL.");
+    throw new UrlError(t("error.url.no_random_seed"));
   settings.tileSystemSettings = { seed: seedParam };
   const dtParam = gameParams.get("dt");
   if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
     settings.dictionaryType = dtParam;
   } else if (dtParam) {
-    throw new UrlError(`Unknown dictionary type: "${dtParam}".`);
+    throw new UrlError(t("error.url.unknown_dictionary_type", { type: dtParam }));
   }
   const dsParam = gameParams.get("ds");
   if (dsParam)
     settings.dictionarySettings = dsParam;
   else if (settings.dictionaryType === "custom") {
-    throw new UrlError("Custom dictionary requires a URL.");
+    throw new UrlError(t("error.url.custom_dictionary_requires_url"));
   }
   let playerId = gameParams.get("pid") ?? undefined;
   if (!playerId) {
@@ -1142,20 +1360,21 @@ function parseBagParam(settings, bagParam) {
   for (const letterConfig of iterator) {
     if (letterConfig === "") {
       const rest = [...iterator].join(".");
-      if (rest !== "en") {
-        throw new UrlError(`Invalid tile distribution specifier: ${rest}`);
+      const bagDefaults = getBagDefaults(rest);
+      if (!bagDefaults) {
+        throw new UrlError(t("error.url.invalid_tile_distribution", { specifier: rest }));
       }
-      for (const [letter2, count2] of settings.letterCounts) {
+      for (const [letter2, count2] of bagDefaults.letterCounts) {
         if (!letterCounts.has(letter2)) {
           letterCounts.set(letter2, count2);
-          letterValues.set(letter2, settings.letterValues.get(letter2));
+          letterValues.set(letter2, bagDefaults.letterValues.get(letter2));
         }
       }
       break;
     }
-    const match = letterConfig.match(/^(?<letter>.)(?:-(?<count>(?:\d+$|\d*))(?:-(?<value>\d+))?)?$/u);
+    const match = letterConfig.match(/^(?<letter>\D+?)(?:-(?<count>(?:\d+$|\d*))(?:-(?<value>\d+))?)?$/u);
     if (!match) {
-      throw new UrlError(`Invalid letter configuration in URL: ${letterConfig}`);
+      throw new UrlError(t("error.url.invalid_letter_config", { config: letterConfig }));
     }
     const g = match.groups;
     const letter = urlToLetter(g.letter);
@@ -1260,13 +1479,13 @@ class Board extends EventTarget {
   checkWordPlacement(...placements) {
     const anyPlacement = placements[0];
     if (!anyPlacement)
-      throw new WordPlacementError("No tiles.");
+      throw new WordPlacementError(t("error.word_placement.no_tiles"));
     for (const placement of placements) {
       if (placement.tile.isBlank && !placement.assignedLetter) {
-        throw new WordPlacementError("Blank tiles must be assigned letters.");
+        throw new WordPlacementError(t("error.word_placement.blank_tiles_must_be_assigned_letters"));
       }
       if (!placement.tile.isBlank && placement.assignedLetter) {
-        throw new WordPlacementError("Non-blank tiles cannot be assigned letters.");
+        throw new WordPlacementError(t("error.word_placement.non_blank_tiles_cannot_be_assigned_letters"));
       }
     }
     const mainDir = { x: 0, y: 0 };
@@ -1278,7 +1497,7 @@ class Board extends EventTarget {
       mainDir.y = 1;
       placements.sort((a, b) => a.row - b.row);
     } else {
-      throw new WordPlacementError("Tiles are not in a line.");
+      throw new WordPlacementError(t("error.word_placement.tiles_not_in_line"));
     }
     const crossDir = { x: mainDir.y, y: mainDir.x };
     const firstPlacement = placements[0];
@@ -1291,7 +1510,9 @@ class Board extends EventTarget {
     }
     const mainStartRow = mainRow;
     const mainStartCol = mainCol;
-    let mainWord = "", crossWords = [], blanks = [];
+    const mainWordTileContent = [];
+    const crossWords = [];
+    const blanks = [];
     let placementIndex = 0;
     let mainWordMultiplier = 1, mainWordScore = 0, crossWordsScore = 0;
     while (true) {
@@ -1302,11 +1523,11 @@ class Board extends EventTarget {
       const placement = placements[placementIndex];
       if (placement && placement.row === mainRow && placement.col === mainCol) {
         if (mainSquare.tile) {
-          throw new WordPlacementError(`Square ${mainRow},${mainCol} is occupied.`);
+          throw new WordPlacementError(t("error.word_placement.square_occupied", { row: mainRow, col: mainCol }));
         }
         placementIndex += 1;
         if (placement.assignedLetter) {
-          blanks.push(mainWord.length);
+          blanks.push(mainWordTileContent.length);
           mainLetter = placement.assignedLetter;
         } else {
           mainLetter = placement.tile.letter;
@@ -1319,14 +1540,15 @@ class Board extends EventTarget {
           crossRow -= crossDir.y;
           crossCol -= crossDir.x;
         }
-        let crossWord = "", crossWordScore = 0;
+        const crossWordTileContent = [];
+        let crossWordScore = 0;
         while (true) {
           const crossSquare = this.squares[crossRow]?.[crossCol];
           if (crossRow === mainRow && crossCol === mainCol) {
-            crossWord += mainLetter;
+            crossWordTileContent.push(mainLetter);
             crossWordScore += mainValue;
           } else if (crossSquare?.tile) {
-            crossWord += crossSquare.letter;
+            crossWordTileContent.push(crossSquare.letter);
             crossWordScore += crossSquare.tile.value;
           } else {
             break;
@@ -1334,8 +1556,8 @@ class Board extends EventTarget {
           crossRow += crossDir.y;
           crossCol += crossDir.x;
         }
-        if (crossWord.length > 1) {
-          crossWords.push(crossWord);
+        if (crossWordTileContent.length > 1) {
+          crossWords.push(crossWordTileContent.join(""));
           crossWordsScore += crossWordScore * wordMultiplier;
         }
       } else if (mainSquare.tile) {
@@ -1345,27 +1567,29 @@ class Board extends EventTarget {
       } else {
         break;
       }
-      mainWord += mainLetter;
+      mainWordTileContent.push(mainLetter);
       mainWordScore += mainValue;
       mainRow += mainDir.y;
       mainCol += mainDir.x;
     }
     mainWordScore *= mainWordMultiplier;
     if (placementIndex < placements.length) {
-      throw new WordPlacementError("Tiles form a line with gaps between them.");
+      throw new WordPlacementError(t("error.word_placement.line_with_gaps"));
     }
-    if (mainWord.length === 1) {
-      throw new WordPlacementError("No single-letter words accepted.");
+    if (mainWordTileContent.length === 1) {
+      throw new WordPlacementError(t("error.word_placement.no_single_letter_words"));
     }
-    if (!crossWords.length && mainWord.length === placements.length) {
+    if (!crossWords.length && mainWordTileContent.length === placements.length) {
       if (!placements.some((tile) => tile.row === this.centerSquare.row && tile.col === this.centerSquare.col)) {
-        throw new WordPlacementError("Tiles must connect to existing words or cover the center square.");
+        throw new WordPlacementError(t("error.word_placement.must_connect_to_existing"));
       }
     }
+    const mainWordForValidation = mainWordTileContent.join("");
+    const mainWordForUrl = mainWordTileContent.every((tc) => [...tc].length === 1) ? mainWordForValidation : mainWordTileContent.join(".");
     return {
-      wordsFormed: [mainWord, ...crossWords],
+      wordsFormed: [mainWordForValidation, ...crossWords],
       score: mainWordScore + crossWordsScore,
-      mainWord,
+      mainWordForUrl,
       row: mainStartRow,
       col: mainStartCol,
       vertical: Boolean(mainDir.y),
@@ -1466,7 +1690,7 @@ var DICTIONARY_TYPES = ["permissive", "freeapi", "custom"];
 
 class PlayRejectedError extends Error {
   constructor(message) {
-    super(`${message} Play rejected.`);
+    super(t("error.play_rejected.play_rejected", { message }));
     this.name = "PlayRejected";
   }
 }
@@ -1485,7 +1709,7 @@ function makeDictionary(dictionaryType, dictionarySettings) {
     if (errors.length === 1)
       throw errors[0];
     const invalidWords = errors.map((wnidError) => wnidError.word);
-    throw new PlayRejectedError(`Not words in ${errors[0].dictionaryName}: ${invalidWords}.`);
+    throw new PlayRejectedError(t("error.play_rejected.not_words_in_dictionary", { dictionaryName: errors[0].dictionaryName, invalidWords: invalidWords.join(", ") }));
   };
 }
 
@@ -1494,7 +1718,7 @@ class WordNotInDictionaryError extends PlayRejectedError {
   dictionaryName;
   status;
   constructor(word, dictionaryName, status) {
-    super(`Word "${word}" ${status} in ${dictionaryName}.`);
+    super(t("error.play_rejected.word_not_in_dictionary", { word, status, dictionaryName }));
     this.word = word;
     this.dictionaryName = dictionaryName;
     this.status = status;
@@ -1504,14 +1728,14 @@ class WordNotInDictionaryError extends PlayRejectedError {
 
 class WordNotFoundError extends WordNotInDictionaryError {
   constructor(word, dictionaryName) {
-    super(word, dictionaryName, "not found");
+    super(word, dictionaryName, t("error.play_rejected.status.not_found"));
     this.name = "WordNotFoundError";
   }
 }
 
 class NoDefinitionError extends WordNotInDictionaryError {
   constructor(word, dictionaryName) {
-    super(word, dictionaryName, "has no definition");
+    super(word, dictionaryName, t("error.play_rejected.status.has_no_definition"));
     this.name = "NoDefinitionError";
   }
 }
@@ -1628,7 +1852,7 @@ class SharedState {
     const boardChanges = [];
     const wordsToCheck = new Set;
     let turnNumber = this.nextTurnNumber;
-    for (const turn of seen.filter((t) => t)) {
+    for (const turn of seen.filter((t2) => t2)) {
       if (turn.turnNumber !== turnNumber) {
         console.warn(`Ignoring out-of-order turn number ${turn.turnNumber}; expected ${turnNumber}.`);
         break;
@@ -1638,11 +1862,11 @@ class SharedState {
         throw new Error(`Turn number ${turn.turnNumber} belongs to player "${playerId}", not "${turn.playerId}".`);
       }
       if ("playTiles" in turn.move) {
-        const { score, wordsFormed, row, col, vertical, blanks } = this.board.checkWordPlacement(...turn.move.playTiles);
+        const { wordsFormed, score, mainWordForUrl, row, col, vertical, blanks } = this.board.checkWordPlacement(...turn.move.playTiles);
         wordsFormed.forEach((w) => wordsToCheck.add(w));
         const bingoBonus = turn.move.playTiles.length === this.tilesState.rackCapacity ? this.settings.bingoBonus : 0;
         boardChanges.push({ playerId, score: score + bingoBonus, placements: turn.move.playTiles });
-        turn.mainWord = wordsFormed[0];
+        turn.mainWord = mainWordForUrl;
         turn.row = row;
         turn.col = col;
         turn.vertical = vertical;
@@ -1688,37 +1912,38 @@ class SharedState {
       const playerId = this.getPlayerForTurnNumber(turnNumber).id;
       if (wordPlayed && direction && wordLocationStr) {
         if (exchangeIndicesStr) {
-          throw new UrlError(`Found both word and exchange data for turn ${turnNumber}.`);
+          throw new UrlError(t("error.url.both_word_and_exchange", { turnNumber }));
         }
         const blankTileAssignments = [];
         if (blankTileIndicesStr) {
           blankTileIndicesStr.split(".").forEach((s) => {
             const match2 = s.match(/^(\d+)$/);
             if (!match2) {
-              throw new UrlError(`Invalid "bt" parameter component: "${s}"`);
+              throw new UrlError(t("error.url.invalid_bt_component", { component: s }));
             }
             const index = parseInt(match2[1], 10);
             if (index in blankTileAssignments) {
-              throw new UrlError(`Duplicate blank tile assignment index: bt=${blankTileIndicesStr}`);
+              throw new UrlError(t("error.url.duplicate_bt_index", { param: blankTileIndicesStr }));
             }
             const assignedLetter = wordPlayed[index];
             if (!assignedLetter) {
-              throw new UrlError(`Blank tile assignment index out of range: no "${wordPlayed}"[${index}].`);
+              throw new UrlError(t("error.url.bt_index_out_of_range", { word: wordPlayed, index }));
             }
             blankTileAssignments[index] = assignedLetter;
           });
         }
         const match = wordLocationStr.match(/^(\d+)\.(\d+)$/);
         if (!match) {
-          throw new UrlError(`Invalid "wl" parameter: "${wordLocationStr}"`);
+          throw new UrlError(t("error.url.invalid_wl_param", { param: wordLocationStr }));
         }
         let row = parseInt(match[1], 10);
         let col = parseInt(match[2], 10);
         const placements = [];
-        Array.from(wordPlayed).map((letter, letterIndex) => {
+        const lettersPlayed = wordPlayed.indexOf(".") === -1 ? [...wordPlayed] : wordPlayed.split(".");
+        lettersPlayed.map((letter, letterIndex) => {
           const square = this.board.squares[row]?.[col];
           if (!square)
-            throw new UrlError(`Attempted to play a word out of bounds: ${row},${col}.`);
+            throw new UrlError(t("error.url.word_out_of_bounds", { row, col }));
           if (!square.tile) {
             const assignedLetter = blankTileAssignments[letterIndex] ?? "";
             if (assignedLetter) {
@@ -1726,11 +1951,11 @@ class SharedState {
             } else {
               const value = this.settings.letterValues.get(letter);
               if (value === undefined)
-                throw new UrlError(`Attempt to play an invalid letter: "${letter}"`);
+                throw new UrlError(t("error.url.invalid_letter", { letter }));
               placements.push({ tile: new Tile({ letter, value }), row, col });
             }
           } else if (square.letter !== letter) {
-            throw new UrlError(`Word requires "${letter}" at ${row},${col}, but "${square.letter}" is there.`);
+            throw new UrlError(t("error.url.wrong_letter", { requiredLetter: letter, row, col, actualLetter: square.letter }));
           }
           if (direction === "wv") {
             row += 1;
@@ -1739,12 +1964,12 @@ class SharedState {
           }
         });
         if (blankTileAssignments.length > wordPlayed.length) {
-          throw new UrlError(`"bt" parameter has index ${blankTileAssignments.length - 1} out of range 0-${wordPlayed.length - 1}.`);
+          throw new UrlError(t("error.url.bt_index_range", { index: blankTileAssignments.length - 1, maxIndex: wordPlayed.length - 1 }));
         }
         yield new Turn(playerId, turnNumber, { playTiles: placements });
       } else if (exchangeIndicesStr != null) {
         if (wordPlayed || direction || wordLocationStr || blankTileIndicesStr) {
-          throw new UrlError(`Incomplete data for turn ${turnNumber}: wl=${wordLocationStr} ${direction}=${wordPlayed} bt=${blankTileIndicesStr}`);
+          throw new UrlError(t("error.url.incomplete_turn_data", { turnNumber, wl: wordLocationStr, direction, word: wordPlayed, bt: blankTileIndicesStr }));
         }
         const exchangeIndexStrs = exchangeIndicesStr ? exchangeIndicesStr.split(".") : [];
         const numberOfTilesInRack = this.tilesState.countTiles(playerId);
@@ -1752,7 +1977,7 @@ class SharedState {
         exchangeIndexStrs.forEach((s) => {
           const index = parseInt(s, 10);
           if (isNaN(index) || index < 0 || index >= numberOfTilesInRack) {
-            throw new UrlError(`Invalid exchange tile index: "${s}"`);
+            throw new UrlError(t("error.url.invalid_exchange_index", { index: s }));
           }
           exchangeTileIndices.push(index);
         });
@@ -1775,7 +2000,7 @@ class SharedState {
         if (player) {
           player.name = value;
         } else {
-          throw new UrlError(`Invalid turn URL: Player ID "${pnMatch[1]}" should be in 1-${this.players.length}.`);
+          throw new UrlError(t("error.url.invalid_player_id", { id: pnMatch[1], maxId: this.players.length }));
         }
       } else if (key === "wl") {
         yield* processPendingMoveIfAny.call(this);
@@ -1785,17 +2010,17 @@ class SharedState {
         exchangeIndicesStr = value;
       } else if (key === "bt") {
         if (blankTileIndicesStr) {
-          throw new UrlError(`Duplicate "bt" parameter for turn ${turnNumber}.`);
+          throw new UrlError(t("error.url.duplicate_bt_param", { turnNumber }));
         }
         blankTileIndicesStr = value;
       } else if (key === "wv" || key === "wh") {
         if (direction) {
-          throw new UrlError(`Duplicate word parameters for turn ${turnNumber}.`);
+          throw new UrlError(t("error.url.duplicate_word_params", { turnNumber }));
         }
         direction = key;
         wordPlayed = value;
       } else {
-        throw new UrlError(`Unrecognized parameter name: "${key}"`);
+        throw new UrlError(t("error.url.unrecognized_param", { param: key }));
       }
     }
     yield* processPendingMoveIfAny.call(this);
@@ -1844,6 +2069,10 @@ function rehydrateTilesState(tileSystemType, tilesStateJson) {
 }
 
 // game/game_state.ts
+function makeStorageKey(gameId) {
+  return "sharewords_" + gameId;
+}
+
 class GameState extends EventTarget {
   playerId;
   keepAllHistory;
@@ -1852,6 +2081,7 @@ class GameState extends EventTarget {
   pendingExtraParams;
   shared;
   inPlayTurns = false;
+  storage = null;
   constructor(playerId, settings, keepAllHistory = true, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
@@ -1886,6 +2116,17 @@ class GameState extends EventTarget {
     this.tilesHeld.splice(0, this.tilesHeld.length, ...other.tilesHeld);
     this.history.splice(0, this.history.length, ...other.history);
     this.pendingExtraParams = other.pendingExtraParams;
+  }
+  save() {
+    const gid = this.gameId;
+    if (gid && this.storage) {
+      const game = this.toJSON();
+      const ver = this.settings.version;
+      const ts = Date.now();
+      const key = makeStorageKey(gid);
+      const value = JSON.stringify({ game, ts, ver });
+      this.storage.setItem(key, value);
+    }
   }
   async init() {
     const tiles = await this.tilesState.getTiles(this.playerId);
@@ -2067,9 +2308,6 @@ class GameState extends EventTarget {
   }
   async playWord() {
     const placements = this.tilesHeld.filter(isBoardPlacement);
-    if (placements.length === 0) {
-      throw new Error("Drag some tiles onto the board, and try again.");
-    }
     const turn = new Turn(this.playerId, this.nextTurnNumber, { playTiles: placements });
     turn.extraParams = this.pendingExtraParams;
     this.pendingExtraParams = new URLSearchParams;
@@ -2095,20 +2333,18 @@ class GameState extends EventTarget {
     try {
       this.inPlayTurns = true;
       await this.doPlayTurns(turns);
+      this.save();
       ok = true;
     } finally {
+      this.inPlayTurns = false;
       if (!ok) {
         console.log("Rolling back game state.");
-        this.copyFrom(await GameState.fromJSON(json));
+        this.copyFrom(GameState.fromJSON(json));
         this.dispatchEvent(new GameEvent("turnchange"));
       }
-      this.inPlayTurns = false;
     }
     if (this.nextTurnNumber !== oldNextTurnNumber) {
       this.dispatchEvent(new GameEvent("turnchange"));
-    }
-    if (this.isGameOver) {
-      this.dispatchEvent(new GameEvent("gameover"));
     }
   }
   async doPlayTurns(turns) {
@@ -2192,7 +2428,7 @@ class GameState extends EventTarget {
     }
     const turnNumber = toTurnNumber(parseInt(urlTurnNumberStr));
     if (isNaN(turnNumber)) {
-      throw new UrlError(`"tn" param is not a turn number: "${urlTurnNumberStr}"`);
+      throw new UrlError(t("error.url.tn_not_a_number", { param: urlTurnNumberStr }));
     }
     await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
@@ -2402,10 +2638,10 @@ class GameSetup {
       const input = this.doc.createElement("input");
       input.type = "text";
       input.value = player.name;
-      input.placeholder = `Player ${index + 1}`;
+      input.placeholder = t("ui.settings.player_placeholder", { index: index + 1 });
       playerEntry.appendChild(input);
       const removeButton = this.doc.createElement("button");
-      removeButton.textContent = "-";
+      removeButton.textContent = t("ui.buttons.remove_player");
       removeButton.onclick = () => {
         const currentPlayers = Array.from(this.playerList.querySelectorAll("input")).map((i) => ({ name: i.value }));
         currentPlayers.splice(index, 1);
@@ -2417,7 +2653,7 @@ class GameSetup {
         const replayLink = this.doc.createElement("a");
         const gameUrl = this.browser.getHref().replace(this.browser.getHash(), "");
         replayLink.href = gameUrl + "#" + historyParams;
-        const linkText = this.doc.createTextNode("join");
+        const linkText = this.doc.createTextNode(t("ui.game.join_link"));
         replayLink.appendChild(linkText);
         playerEntry.appendChild(replayLink);
       }
@@ -2691,7 +2927,7 @@ class View {
     }
   }
   renderBagTileCount() {
-    this.bagTileCountContainer.textContent = `Tiles in bag: ${this.gameState.numberOfTilesInBag}`;
+    this.bagTileCountContainer.textContent = t("ui.bag_tile_count", { count: this.gameState.numberOfTilesInBag });
   }
   renderActionButtons() {
     const passExchangeButton = this.doc.getElementById("pass-exchange");
@@ -2701,9 +2937,9 @@ class View {
     playWordButton.disabled = !isLocalPlayerTurn;
     const count = this.gameState.exchangeTilesCount;
     if (count === 0) {
-      passExchangeButton.textContent = "Pass Turn";
+      passExchangeButton.textContent = t("ui.buttons.pass_turn");
     } else {
-      passExchangeButton.textContent = `Exchange ${count}`;
+      passExchangeButton.textContent = t("ui.buttons.exchange_count", { count });
     }
   }
   getElementByLocation(row, col) {
@@ -2760,16 +2996,18 @@ class View {
     let copyUrlCheckbox;
     if (showCopyCheckbox) {
       const copyUrlContainer = this.doc.createElement("div");
-      copyUrlContainer.innerHTML = `
-        <label>
-          <input type="checkbox" id="copy-url-checkbox" checked>
-          Copy Turn URL?
-        </label>
-      `;
-      copyUrlCheckbox = copyUrlContainer.querySelector("#copy-url-checkbox");
+      const label = this.doc.createElement("label");
+      const checkbox = this.doc.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = "copy-url-checkbox";
+      checkbox.checked = true;
+      label.appendChild(checkbox);
+      label.appendChild(this.doc.createTextNode(t("ui.dialog.copy_turn_url")));
+      copyUrlContainer.appendChild(label);
+      copyUrlCheckbox = checkbox;
       content.appendChild(copyUrlContainer);
     }
-    const dialog = new Dialog(this.doc, title, content, ["OK", "Cancel"]);
+    const dialog = new Dialog(this.doc, title, content, [t("ui.buttons.ok"), t("ui.buttons.cancel_settings")]);
     const result = await dialog.show();
     return {
       confirmed: result === "OK",
@@ -3209,6 +3447,20 @@ class Controller {
   }
 }
 
+// view/i18n.ts
+function initI18n(doc) {
+  const elements = doc.querySelectorAll("[data-i18n]");
+  elements.forEach((element) => {
+    const key = element.getAttribute("data-i18n");
+    if (key) {
+      const translation = t(key);
+      if (translation !== key) {
+        element.prepend(translation);
+      }
+    }
+  });
+}
+
 // browser.ts
 class DomBrowser {
   reload() {
@@ -3227,11 +3479,11 @@ class DomBrowser {
   addHashChangeListener(listener) {
     window.addEventListener("hashchange", listener);
   }
-  getLocalStorageItem(key) {
-    return localStorage.getItem(key);
+  get localStorage() {
+    return localStorage;
   }
-  setLocalStorageItem(key, value) {
-    localStorage.setItem(key, value);
+  get languages() {
+    return navigator.languages;
   }
   getDocument() {
     return document;
@@ -3265,10 +3517,6 @@ class DomBrowser {
 }
 
 // app.ts
-function makeStorageKey(gameId) {
-  return "sharewords_" + gameId;
-}
-
 class App {
   browser;
   gameState;
@@ -3282,17 +3530,6 @@ class App {
     const paramsStr = this.gameState.turnUrlParams.toString();
     if (this.browser.getHash().substr(1) !== paramsStr) {
       this.browser.setHash(paramsStr);
-    }
-  }
-  saveGameState() {
-    const gid = this.gameState.gameId;
-    if (gid) {
-      const game = this.gameState.toJSON();
-      const ver = this.gameState.settings.version;
-      const ts = Date.now();
-      const key = makeStorageKey(gid);
-      const value = JSON.stringify({ game, ts, ver });
-      this.browser.setLocalStorageItem(key, value);
     }
   }
   async init() {
@@ -3311,10 +3548,13 @@ class App {
         }
         return;
       }
-      const savedGame = gidParam && this.browser.getLocalStorageItem(makeStorageKey(gidParam));
+      const savedGame = gidParam && this.browser.localStorage.getItem(makeStorageKey(gidParam));
       if (savedGame) {
         console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
         this.gameState = GameState.fromJSON(JSON.parse(savedGame).game);
+        await loadTranslations(...this.browser.languages);
+        initI18n(this.browser.getDocument());
+        this.gameState.storage = this.browser.localStorage;
         await this.gameState.applyTurnParams(params);
       } else if (this.gameState) {
         this.browser.reload();
@@ -3325,7 +3565,9 @@ class App {
         if (!params.get("seed"))
           params.set("seed", String(Math.floor(1e6 * this.browser.getRandom())));
         this.gameState = await GameState.fromParams(params);
-        this.saveGameState();
+        await loadTranslations(...this.browser.languages);
+        initI18n(this.browser.getDocument());
+        this.gameState.storage = this.browser.localStorage;
       }
       this.updateUrl();
       this.view = new View(this.gameState, this.browser);
@@ -3347,7 +3589,7 @@ class App {
         if (evt.detail.fromRow === "exchange" !== (evt.detail.placement.row === "exchange")) {
           this.view.renderActionButtons();
         }
-        this.saveGameState();
+        this.gameState.save();
       });
       this.gameState.addEventListener("turnchange", () => {
         this.view.renderBoard();
@@ -3356,14 +3598,9 @@ class App {
         this.view.renderBagTileCount();
         this.view.renderActionButtons();
         this.updateUrl();
-        this.saveGameState();
-      });
-      this.gameState.addEventListener("gameover", () => {
-        this.saveGameState();
       });
     };
     this.browser.addHashChangeListener(handleGameChange);
-    this.browser.addPasteListener(this.handlePaste.bind(this));
     await handleGameChange();
   }
   initDebug() {
@@ -3381,20 +3618,6 @@ class App {
       };
     }
   }
-  async handlePaste(pastedText) {
-    try {
-      const url = new URL(pastedText);
-      const Href = this.browser.getHref();
-      if (url.origin !== new URL(Href).origin || url.pathname !== new URL(Href).pathname) {
-        return;
-      }
-      const params = this.browser.getURLSearchParams(url.hash.substring(1));
-      if (!(this.gameState && fromGameId(this.gameState.gameId) === params.get("gid"))) {
-        return;
-      }
-      await this.gameState.applyTurnParams(params);
-    } catch (e) {}
-  }
 }
 if (typeof window !== "undefined") {
   const app = new App(new DomBrowser);
@@ -3402,7 +3625,7 @@ if (typeof window !== "undefined") {
 }
 </script></head>
   <body>
-    <h1>Crossword Builder</h1>
+    <h1 data-i18n="ui.title"></h1>
     <div id="game-container">
       <div id="center-panel">
         <div id="score-panel"></div>
@@ -3413,41 +3636,41 @@ if (typeof window !== "undefined") {
         <div id="rack-container"></div>
         <div id="exchange-container"></div>
         <div id="buttons-container">
-          <button id="play-word">Play Word</button>
+          <button id="play-word" data-i18n="ui.buttons.play_word"></button>
           <button id="pass-exchange">Pass/Exchange</button>
-          <button id="recall-tiles">Recall Tiles</button>
-          <button id="game-setup">Game Setup</button>
+          <button id="recall-tiles" data-i18n="ui.buttons.recall_tiles"></button>
+          <button id="game-setup" data-i18n="ui.buttons.game_setup"></button>
         </div>
         <div id="settings-dialog" hidden>
           <div class="content">
             <div class="settings-group">
-              <h3>Players</h3>
+              <h3 data-i18n="ui.settings.players"></h3>
               <div id="player-list"></div>
-              <button id="add-player-button">+</button>
+              <button id="add-player-button" data-i18n="ui.buttons.add_player"></button>
             </div>
             <div class="settings-group">
-              <h3>Dictionary</h3>
+              <h3 data-i18n="ui.settings.dictionary"></h3>
               <select id="dictionary-type">
-                <option value="permissive">Anything is a word</option>
-                <option value="freeapi">freeapi</option>
-                <option value="custom">custom</option>
+                <option value="permissive" data-i18n="ui.settings.dictionary_options.permissive"></option>
+                <option value="freeapi" data-i18n="ui.settings.dictionary_options.freeapi"></option>
+                <option value="custom" data-i18n="ui.settings.dictionary_options.custom"></option>
               </select>
               <div id="dictionary-url-container" hidden>
-                <label>URL: <input type="text" id="dictionary-url" placeholder="URL"></label>
+                <label data-i18n="ui.settings.dictionary_url_label"><input type="text" id="dictionary-url" placeholder="URL"></label>
               </div>
             </div>
             <div class="settings-group">
-              <h3>Bingo Bonus</h3>
+              <h3 data-i18n="ui.settings.bingo_bonus"></h3>
               <input type="number" id="bingo-bonus">
             </div>
             <div class="settings-group">
-              <h3>Random Seed</h3>
+              <h3 data-i18n="ui.settings.random_seed"></h3>
               <input type="text" id="random-seed">
             </div>
           </div>
           <div class="buttons">
-            <button id="start-game-with-settings">Start Game with Settings</button>
-            <button id="cancel-settings">Cancel</button>
+            <button id="start-game-with-settings" data-i18n="ui.buttons.start_game_with_settings"></button>
+            <button id="cancel-settings" data-i18n="ui.buttons.cancel_settings"></button>
           </div>
         </div>
       </div>
