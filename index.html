@@ -585,6 +585,7 @@ class Settings {
   letterCounts;
   letterValues;
   gameId;
+  baseUrl = "http://nonet/";
   version = PROTOCOL_VERSION;
   players = ["1", "2"].map((id) => new Player({ id }));
   maxPlayerNameLength = 50;
@@ -2755,32 +2756,34 @@ class WordList {
 }
 
 // game/dictionary.ts
+var SWDICT_SUFFIX = ".swdict";
+
 class PlayRejectedError extends Error {
   constructor(message) {
     super(t("error.play_rejected.play_rejected", { message }));
     this.name = "PlayRejected";
   }
 }
-function makeDictionary(dictionaryType, dictionarySettings) {
-  if (dictionaryType === "permissive")
+function makeDictionary(settings) {
+  if (settings.dictionaryType === "permissive")
     return async (...words) => null;
-  if (dictionaryType === "custom")
-    return makeCustomDictionary(dictionarySettings);
-  if (dictionaryType === "freeapi") {
+  if (settings.dictionaryType === "custom")
+    return makeCustomDictionary(settings);
+  if (settings.dictionaryType === "freeapi") {
     let urlTemplate, dictionaryName;
-    if (dictionarySettings) {
-      if (typeof dictionarySettings !== "string") {
-        throw new Error(`Dictionary type "${dictionaryType}" requires setting a URL template.`);
+    if (settings.dictionarySettings) {
+      if (typeof settings.dictionarySettings !== "string") {
+        throw new Error(`Dictionary type "${settings.dictionaryType}" requires setting a URL template.`);
       }
-      urlTemplate = dictionarySettings;
-      dictionaryName = dictionarySettings;
+      urlTemplate = settings.dictionarySettings;
+      dictionaryName = settings.dictionarySettings;
     } else {
       urlTemplate = "https://api.dictionaryapi.dev/api/v2/entries/en/{lower}";
       dictionaryName = "Free Dictionary API";
     }
     return makeUrlTemplateDictionary(urlTemplate, dictionaryName);
   }
-  throw new Error(`dictionaryType ${dictionaryType} is not supported.`);
+  throw new Error(`dictionaryType ${settings.dictionaryType} is not supported.`);
 }
 
 class WordNotInDictionaryError extends PlayRejectedError {
@@ -2846,17 +2849,28 @@ async function checkWordUsingUrl(wordToCheck, url, dictionaryName) {
     throw new Error(`Could not reach ${dictionaryName} to validate "${wordToCheck}". Check connection or API status.`);
   }
 }
-function makeCustomDictionary(dictionarySettings) {
+function makeCustomDictionary(settings) {
+  const dictionarySettings = settings.dictionarySettings;
   if (typeof dictionarySettings !== "string") {
-    throw new TypeError("Custom dictionary requires a URL.");
+    throw new TypeError(`Custom dictionary requires a string URL, not ${dictionarySettings}.`);
   }
   let wordListPromise = null;
   const getWordList = () => {
     if (!wordListPromise) {
+      let dictionaryUrl;
+      try {
+        dictionaryUrl = new URL(dictionarySettings).href;
+      } catch (e) {
+        if (!(e instanceof TypeError))
+          throw e;
+        const maybeSuffix = dictionarySettings.slice(-SWDICT_SUFFIX.length) === SWDICT_SUFFIX ? "" : SWDICT_SUFFIX;
+        const relativeUrl = dictionarySettings + maybeSuffix;
+        dictionaryUrl = new URL(relativeUrl, new URL("dict/", settings.baseUrl)).href;
+      }
       wordListPromise = (async () => {
-        const response = await fetch(dictionarySettings);
+        const response = await fetch(dictionaryUrl);
         if (!response.ok) {
-          throw new Error(`Failed to fetch custom dictionary from ${dictionarySettings}: ${response.statusText}`);
+          throw new Error(`Failed to fetch custom dictionary from ${dictionaryUrl}: ${response.statusText}`);
         }
         const buffer = await response.arrayBuffer();
         return new WordList(new Uint8Array(buffer));
@@ -2891,7 +2905,7 @@ class SharedState {
   nextTurnNumber;
   checkWords;
   gameParams;
-  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), checkWords = makeDictionary(settings.dictionaryType, settings.dictionarySettings), gameParams = gameParamsFromSettings(settings)) {
+  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), checkWords = makeDictionary(settings), gameParams = gameParamsFromSettings(settings)) {
     this.settings = settings;
     this.gameId = gameId;
     this.board = board;
@@ -3534,8 +3548,9 @@ class GameState extends EventTarget {
     }
     await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
-  static async fromParams(params) {
+  static async fromParams(params, baseUrl = "http://localhost/") {
     const { settings, playerId, turnParams } = parseGameParams(params);
+    settings.baseUrl = baseUrl;
     const gameState = new GameState(playerId, settings);
     await gameState.init();
     await gameState.applyTurnParams(turnParams);
@@ -3790,8 +3805,8 @@ class GameSetup {
     this._updatePlayerList(this.gameState.players);
     this.dictionaryType.value = this.gameState.settings.dictionaryType;
     this._handleDictChange();
-    if (this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings === "object" && "url" in this.gameState.settings.dictionarySettings && typeof this.gameState.settings.dictionarySettings.url === "string") {
-      this.dictionaryUrl.value = this.gameState.settings.dictionarySettings.url;
+    if (typeof this.gameState.settings.dictionarySettings === "string") {
+      this.dictionaryUrl.value = this.gameState.settings.dictionarySettings;
     } else {
       this.dictionaryUrl.value = "";
     }
@@ -4674,6 +4689,8 @@ class App {
     if (this.browser.getURLSearchParams(this.browser.getSearch()).has("debug")) {
       this.initDebug();
     }
+    await loadTranslations(...this.browser.languages);
+    initI18n(this.browser.getDocument());
     const handleGameChange = async () => {
       const params = this.browser.getURLSearchParams(this.browser.getHash()?.substring(1) || "");
       const gidParam = params.get("gid");
@@ -4690,8 +4707,7 @@ class App {
       if (savedGame) {
         console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
         this.gameState = GameState.fromJSON(JSON.parse(savedGame).game);
-        await loadTranslations(...this.browser.languages);
-        initI18n(this.browser.getDocument());
+        this.gameState.settings.baseUrl = this.browser.getHref();
         this.gameState.storage = this.browser.localStorage;
         await this.gameState.applyTurnParams(params);
       } else if (this.gameState) {
@@ -4704,9 +4720,7 @@ class App {
           params.set("seed", String(Math.floor(1e6 * this.browser.getRandom())));
         if (!params.get("bag"))
           params.set("bag", "." + this.chooseBagLanguage());
-        this.gameState = await GameState.fromParams(params);
-        await loadTranslations(...this.browser.languages);
-        initI18n(this.browser.getDocument());
+        this.gameState = await GameState.fromParams(params, this.browser.getHref());
         this.gameState.storage = this.browser.localStorage;
       }
       this.updateUrl();
