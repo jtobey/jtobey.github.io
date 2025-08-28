@@ -2335,9 +2335,9 @@ function assertFloat32(arg) {
     throw new Error("invalid float32: " + arg);
 }
 
-// dict/dict.ts
+// dict/swdict.ts
 function createBaseMacro() {
-  return { clear: undefined, subword: undefined, backup: undefined };
+  return { clear: undefined, subword: undefined, backup: undefined, subroutine: undefined };
 }
 var Macro = {
   encode(message, writer = new BinaryWriter) {
@@ -2349,6 +2349,9 @@ var Macro = {
     }
     if (message.backup !== undefined) {
       writer.uint32(24).uint64(message.backup);
+    }
+    if (message.subroutine !== undefined) {
+      Macro_Subroutine.encode(message.subroutine, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -2380,6 +2383,13 @@ var Macro = {
           message.backup = longToNumber(reader.uint64());
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+          message.subroutine = Macro_Subroutine.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2392,7 +2402,8 @@ var Macro = {
     return {
       clear: isSet(object.clear) ? Macro_Clear.fromJSON(object.clear) : undefined,
       subword: isSet(object.subword) ? globalThis.String(object.subword) : undefined,
-      backup: isSet(object.backup) ? globalThis.Number(object.backup) : undefined
+      backup: isSet(object.backup) ? globalThis.Number(object.backup) : undefined,
+      subroutine: isSet(object.subroutine) ? Macro_Subroutine.fromJSON(object.subroutine) : undefined
     };
   },
   toJSON(message) {
@@ -2406,6 +2417,9 @@ var Macro = {
     if (message.backup !== undefined) {
       obj.backup = Math.round(message.backup);
     }
+    if (message.subroutine !== undefined) {
+      obj.subroutine = Macro_Subroutine.toJSON(message.subroutine);
+    }
     return obj;
   },
   create(base) {
@@ -2416,6 +2430,7 @@ var Macro = {
     message.clear = object.clear !== undefined && object.clear !== null ? Macro_Clear.fromPartial(object.clear) : undefined;
     message.subword = object.subword ?? undefined;
     message.backup = object.backup ?? undefined;
+    message.subroutine = object.subroutine !== undefined && object.subroutine !== null ? Macro_Subroutine.fromPartial(object.subroutine) : undefined;
     return message;
   }
 };
@@ -2453,6 +2468,68 @@ var Macro_Clear = {
   },
   fromPartial(_) {
     const message = createBaseMacro_Clear();
+    return message;
+  }
+};
+function createBaseMacro_Subroutine() {
+  return { instructions: [] };
+}
+var Macro_Subroutine = {
+  encode(message, writer = new BinaryWriter) {
+    writer.uint32(10).fork();
+    for (const v of message.instructions) {
+      writer.uint64(v);
+    }
+    writer.join();
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMacro_Subroutine();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag === 8) {
+            message.instructions.push(longToNumber(reader.uint64()));
+            continue;
+          }
+          if (tag === 10) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.instructions.push(longToNumber(reader.uint64()));
+            }
+            continue;
+          }
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+  fromJSON(object) {
+    return {
+      instructions: globalThis.Array.isArray(object?.instructions) ? object.instructions.map((e) => globalThis.Number(e)) : []
+    };
+  },
+  toJSON(message) {
+    const obj = {};
+    if (message.instructions?.length) {
+      obj.instructions = message.instructions.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+  create(base) {
+    return Macro_Subroutine.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseMacro_Subroutine();
+    message.instructions = object.instructions?.map((e) => e) || [];
     return message;
   }
 };
@@ -2679,6 +2756,7 @@ class WordList {
       throw new InvalidLexiconError("No `metadata` field.");
     this._metadata = metadata;
     this.instructions = insns;
+    this._checkForRecursion();
   }
   get metadata() {
     return this._metadata;
@@ -2686,24 +2764,65 @@ class WordList {
   get macros() {
     return this._metadata.macros;
   }
+  _checkForRecursion() {
+    const visiting = new Set;
+    const visited = new Set;
+    for (let i = 0;i < this.macros.length; ++i) {
+      if (visited.has(i))
+        continue;
+      this._dfs(i, visiting, visited);
+    }
+  }
+  _dfs(macroIndex, visiting, visited) {
+    visiting.add(macroIndex);
+    const macro = this.macros[macroIndex];
+    if (macro?.subroutine) {
+      for (const subMacroIndex of macro.subroutine.instructions) {
+        if (visiting.has(subMacroIndex)) {
+          throw new InvalidLexiconError("Recursive subroutine detected.");
+        }
+        if (!visited.has(subMacroIndex)) {
+          this._dfs(subMacroIndex, visiting, visited);
+        }
+      }
+    }
+    visiting.delete(macroIndex);
+    visited.add(macroIndex);
+  }
   *scanFrom(ip, wordBuffer = []) {
-    while (!ip.atEnd) {
-      const insn = this.macros[ip.varintNumber()];
+    const stack = [this.readInstructions(ip)];
+    while (stack.length > 0) {
+      const it = stack[stack.length - 1];
+      const next = it.next();
+      if (next.done) {
+        stack.pop();
+        continue;
+      }
+      const macroIndex = next.value;
+      const insn = this.macros[macroIndex];
       if (!insn) {
-        throw new InvalidLexiconError(`Instruction ${insn} out of range [0, ${this.macros.length - 1}).`);
+        throw new InvalidLexiconError(`Instruction ${macroIndex} out of range [0, ${this.macros.length - 1}).`);
       }
       if (insn.subword !== undefined) {
         wordBuffer.push(insn.subword);
-        continue;
+      } else if (insn.subroutine) {
+        stack.push(insn.subroutine.instructions[Symbol.iterator]());
+      } else {
+        yield wordBuffer.join("");
+        if (insn.clear) {
+          wordBuffer.length = 0;
+        } else if (insn.backup !== undefined) {
+          wordBuffer.length -= insn.backup;
+        }
       }
-      yield wordBuffer.join("");
-      if (insn.clear)
-        wordBuffer.length = 0;
-      else if (insn.backup !== undefined)
-        wordBuffer.length -= insn.backup;
     }
     if (wordBuffer.length) {
       yield wordBuffer.join("");
+    }
+  }
+  *readInstructions(ip) {
+    while (!ip.atEnd) {
+      yield ip.varintNumber();
     }
   }
   [Symbol.iterator]() {
@@ -3730,19 +3849,16 @@ class GameSetup {
       const playerInputs = Array.from(this.playerList.querySelectorAll("input"));
       const playerNames = playerInputs.map((input) => input.value).filter((name) => name.trim() !== "");
       settings.players = playerNames.map((name, i) => new Player({ id: String(i + 1), name }));
-      const dictionaryType = this.dictionaryType.value;
-      if (dictionaryType === "permissive" || dictionaryType === "freeapi" || dictionaryType === "custom") {
-        settings.dictionaryType = dictionaryType;
-      }
-      if (dictionaryType === "freeapi" || dictionaryType === "custom") {
-        const url = this.dictionaryUrl.value;
-        if (url) {
-          settings.dictionarySettings = url;
-        } else {
-          settings.dictionarySettings = null;
-        }
-      } else {
+      const dictionaryValue = this.dictionaryType.value;
+      if (dictionaryValue === "permissive") {
+        settings.dictionaryType = "permissive";
         settings.dictionarySettings = null;
+      } else if (dictionaryValue === "freeapi" || dictionaryValue === "custom") {
+        settings.dictionaryType = dictionaryValue;
+        settings.dictionarySettings = this.dictionaryUrl.value || null;
+      } else {
+        settings.dictionaryType = "custom";
+        settings.dictionarySettings = dictionaryValue;
       }
       const bagLanguage = this.tileDistribution.value;
       if (hasBagDefaults(bagLanguage)) {
@@ -3800,10 +3916,16 @@ class GameSetup {
     } else {
       this.dictionaryUrlContainer.hidden = true;
     }
+    if (selectedValue !== "custom" && selectedValue !== "freeapi") {
+      this.dictionaryUrl.value = "";
+    }
   }
   _populateSettingsDialog() {
     this._updatePlayerList(this.gameState.players);
     this.dictionaryType.value = this.gameState.settings.dictionaryType;
+    if (this.gameState.settings.dictionaryType === "custom" && typeof this.gameState.settings.dictionarySettings === "string" && this.dictionaryType.querySelector(`option[value="${this.gameState.settings.dictionarySettings}"]`)) {
+      this.dictionaryType.value = this.gameState.settings.dictionarySettings;
+    }
     this._handleDictChange();
     if (typeof this.gameState.settings.dictionarySettings === "string") {
       this.dictionaryUrl.value = this.gameState.settings.dictionarySettings;
@@ -4814,6 +4936,10 @@ if (typeof window !== "undefined") {
               <select id="dictionary-type">
                 <option value="permissive" data-i18n="ui.settings.dictionary_options.permissive"></option>
                 <option value="freeapi" data-i18n="ui.settings.dictionary_options.freeapi"></option>
+                                <option value="es.rae.st.123k">Español RAE 123k</option>
+                <option value="linux-10k">Cygwin English 10k</option>
+                <option value="linux">Cygwin English</option>
+                <option value="test">Test Dictionary</option>
                 <option value="custom" data-i18n="ui.settings.dictionary_options.custom"></option>
               </select>
               <div id="dictionary-url-container" hidden>
