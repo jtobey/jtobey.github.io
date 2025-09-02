@@ -285,6 +285,10 @@ dialog button {
   margin-left: .5em;
 }
 
+.replay-link, .source-link {
+  padding: 1em;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     color: #eee;
@@ -4124,6 +4128,7 @@ class GameSetup {
       if (this.gameState.keepAllHistory && player.id !== undefined) {
         const historyParams = this.gameState.getHistoryUrlParamsForPlayer(player.id);
         const replayLink = this.doc.createElement("a");
+        replayLink.className = "replay-link";
         const gameUrl = this.browser.getHref().replace(this.browser.getHash(), "");
         replayLink.href = gameUrl + "#" + historyParams;
         const linkText = this.doc.createTextNode(t("ui.game.join_link"));
@@ -5228,6 +5233,9 @@ if (typeof window !== "undefined") {
           <div class="buttons">
             <button id="start-game-with-settings" data-i18n="ui.buttons.start_game_with_settings"></button>
             <button id="cancel-settings" data-i18n="ui.buttons.cancel_settings"></button>
+          </div>
+          <div class="source-link">
+            <a href="https://github.com/jtobey/sharewords">source code</a>
           </div>
         </div>
       </div>
