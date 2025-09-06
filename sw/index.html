@@ -600,7 +600,13 @@ class Player {
 }
 
 // game/version.ts
-var PROTOCOL_VERSION = "1";
+var toProtocolVersion = (v) => v;
+var _PROTOCOL_VERSIONS = Object.create(null);
+var v = (vStr) => _PROTOCOL_VERSIONS[vStr] = toProtocolVersion(vStr);
+var PROTOCOL_VERSIONS = _PROTOCOL_VERSIONS;
+var PROTOCOL_VERSION_0 = v("0");
+var PROTOCOL_VERSION_1 = v("1");
+var PROTOCOL_VERSION = PROTOCOL_VERSION_1;
 
 // game/settings.ts
 function toGameId(gameIdStr) {
@@ -700,7 +706,8 @@ class Settings {
       "dictionarySettings"
     ]))
       fail("Wrong keys or key order");
-    if (json.version !== PROTOCOL_VERSION)
+    const protocolVersion = PROTOCOL_VERSIONS[json.version];
+    if (!protocolVersion)
       fail(`Unsupported protocol version "${json.version}"`);
     if (!Array.isArray(json.players))
       fail("`players` is not an array");
@@ -720,11 +727,12 @@ class Settings {
       fail("`tileSystemSettings` is null");
     if (typeof json.tileSystemSettings.seed !== "string")
       fail("`tileSystemSettings.seed` is not a string");
-    if (!["permissive", "consensus", "wordlist", "freeapi"].includes(json.dictionaryType)) {
-      fail(`Unsupported dictionary type "${json.dictionaryType}"`);
+    const dictionaryType = json.dictionaryType === "custom" ? "wordlist" : json.dictionaryType;
+    if (!["permissive", "consensus", "wordlist", "freeapi"].includes(dictionaryType)) {
+      fail(`Unsupported dictionary type "${dictionaryType}"`);
     }
     const settings = Settings.forLanguage("");
-    settings.version = json.version;
+    settings.version = PROTOCOL_VERSION;
     settings.players = json.players.map(Player.fromJSON);
     settings.letterCounts = checkLetterToNumberMap("letterCounts", json.letterCounts);
     settings.letterValues = checkLetterToNumberMap("letterValues", json.letterValues);
@@ -733,7 +741,7 @@ class Settings {
     settings.rackCapacity = json.rackCapacity;
     settings.tileSystemType = json.tileSystemType;
     settings.tileSystemSettings = json.tileSystemSettings;
-    settings.dictionaryType = json.dictionaryType;
+    settings.dictionaryType = dictionaryType;
     settings.dictionarySettings = json.dictionarySettings;
     return settings;
   }
@@ -747,11 +755,11 @@ function checkLetterToNumberMap(name, json) {
       fail(`Type is "${typeof json}", not "object" as expected.`);
     json = [...Object.entries(json)];
   }
-  json.forEach(([k, v]) => {
+  json.forEach(([k, v2]) => {
     if (typeof k !== "string")
       fail(`Letter ${k} has type "${typeof k}", not "string" as expected.`);
-    if (typeof v !== "number")
-      fail(`Letter ${k} has value ${v}, not a number as expected.`);
+    if (typeof v2 !== "number")
+      fail(`Letter ${k} has value ${v2}, not a number as expected.`);
   });
   return new Map(json);
 }
@@ -2567,8 +2575,8 @@ function createBaseMacro_Subroutine() {
 var Macro_Subroutine = {
   encode(message, writer = new BinaryWriter) {
     writer.uint32(10).fork();
-    for (const v of message.instructions) {
-      writer.uint64(v);
+    for (const v2 of message.instructions) {
+      writer.uint64(v2);
     }
     writer.join();
     return writer;
@@ -2645,14 +2653,14 @@ var Metadata = {
     if (message.clearInterval !== 0) {
       writer.uint32(24).uint64(message.clearInterval);
     }
-    for (const v of message.macros) {
-      Macro.encode(v, writer.uint32(34).fork()).join();
+    for (const v2 of message.macros) {
+      Macro.encode(v2, writer.uint32(34).fork()).join();
     }
     message.subwordFrequencies.forEach((value, key) => {
       Metadata_SubwordFrequenciesEntry.encode({ key, value }, writer.uint32(42).fork()).join();
     });
-    for (const v of message.languageCodes) {
-      writer.uint32(50).string(v);
+    for (const v2 of message.languageCodes) {
+      writer.uint32(50).string(v2);
     }
     if (message.wordCount !== 0) {
       writer.uint32(56).uint64(message.wordCount);
@@ -2756,8 +2764,8 @@ var Metadata = {
     }
     if (message.subwordFrequencies?.size) {
       obj.subwordFrequencies = {};
-      message.subwordFrequencies.forEach((v, k) => {
-        obj.subwordFrequencies[k] = Math.round(v);
+      message.subwordFrequencies.forEach((v2, k) => {
+        obj.subwordFrequencies[k] = Math.round(v2);
       });
     }
     if (message.languageCodes?.length) {
@@ -4499,7 +4507,7 @@ class View {
     const dropTarget = this.dropTargetMap.get(dropTargetId);
     if (dropTarget) {
       this.dropTargetMap.delete(dropTargetId);
-      if (!this.dropTargetMap.values().find((v) => v.row === dropTarget.row && v.col === dropTarget.col)) {
+      if (!this.dropTargetMap.values().find((v2) => v2.row === dropTarget.row && v2.col === dropTarget.col)) {
         const el = this.getElementByLocation(dropTarget.row, dropTarget.col);
         el?.classList.remove("drop-target");
       }
@@ -4745,6 +4753,27 @@ class PointerHandler {
   scrollWindowBy(dx, dy) {
     window.scrollBy(dx, dy);
   }
+  findNearestRackOrExchangeSpot(container, clientX, clientY) {
+    let bestSpot = null;
+    let minDistance = Infinity;
+    const spots = Array.from(container.querySelectorAll(".tile-spot, .tile, .placed"));
+    for (const spot of spots) {
+      if (!(spot instanceof HTMLElement))
+        continue;
+      const rect = spot.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const distance = Math.hypot(clientX - centerX, clientY - centerY);
+      if (distance < minDistance) {
+        minDistance = distance;
+        const rowStr = spot.dataset.row;
+        const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
+        const col = parseInt(spot.dataset.col, 10);
+        bestSpot = { row, col };
+      }
+    }
+    return bestSpot;
+  }
   updateTransform() {
     this.scale = Math.max(1, Math.min(4, this.scale));
     const boardRect = this.view.getBoardContainer().getBoundingClientRect();
@@ -4864,7 +4893,17 @@ class PointerHandler {
           const toCol = parseInt(dropTarget.dataset.col, 10);
           this.view.setDropTarget(evt.pointerId, toRow, toCol);
         } else {
-          this.view.clearDropTarget(evt.pointerId);
+          const rackOrExchange = targetElement.closest("#rack-container, #exchange-container");
+          if (rackOrExchange instanceof HTMLElement) {
+            const nearestSpot = this.findNearestRackOrExchangeSpot(rackOrExchange, evt.clientX, evt.clientY);
+            if (nearestSpot) {
+              this.view.setDropTarget(evt.pointerId, nearestSpot.row, nearestSpot.col);
+            } else {
+              this.view.clearDropTarget(evt.pointerId);
+            }
+          } else {
+            this.view.clearDropTarget(evt.pointerId);
+          }
         }
       }
     }
