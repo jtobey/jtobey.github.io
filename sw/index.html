@@ -285,8 +285,12 @@ dialog button {
   margin-left: .5em;
 }
 
-.replay-link, .source-link {
-  padding: 1em;
+.replay-link {
+  margin-left: 1em;
+}
+
+.source-link {
+  margin-top: 1em;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -677,7 +681,12 @@ class Settings {
     };
   }
   static fromJSON(json) {
-    if (!(typeof json === "object" && arraysEqual([...Object.keys(json)], [
+    function fail(msg) {
+      throw new TypeError(`${msg} in Settings serialization: ${JSON.stringify(json)}`);
+    }
+    if (typeof json !== "object")
+      fail("Not an object");
+    if (!arraysEqual([...Object.keys(json)], [
       "version",
       "players",
       "letterCounts",
@@ -689,8 +698,30 @@ class Settings {
       "tileSystemSettings",
       "dictionaryType",
       "dictionarySettings"
-    ]) && json.version === PROTOCOL_VERSION && Array.isArray(json.players) && Array.isArray(json.boardLayout) && json.boardLayout.every((s) => typeof s === "string") && typeof json.bingoBonus === "number" && typeof json.rackCapacity === "number" && json.tileSystemType === "honor" && typeof json.tileSystemSettings === "object" && typeof json.tileSystemSettings.seed === "string" && ["permissive", "freeapi", "custom"].includes(json.dictionaryType))) {
-      throw new TypeError(`Invalid Settings serialization: ${JSON.stringify(json)}`);
+    ]))
+      fail("Wrong keys or key order");
+    if (json.version !== PROTOCOL_VERSION)
+      fail(`Unsupported protocol version "${json.version}"`);
+    if (!Array.isArray(json.players))
+      fail("`players` is not an array");
+    if (!Array.isArray(json.boardLayout))
+      fail("`boardLayout` is not an array");
+    if (!json.boardLayout.every((s) => typeof s === "string"))
+      fail("`boardLayout` contains a non-string");
+    if (typeof json.bingoBonus !== "number")
+      fail("`bingoBonus` is not a number");
+    if (typeof json.rackCapacity !== "number")
+      fail("`rackCapacity` is not a number");
+    if (json.tileSystemType !== "honor")
+      fail(`Unsupported tile system type "${json.tileSystemType}"`);
+    if (typeof json.tileSystemSettings !== "object")
+      fail("`tileSystemSettings` is not an object");
+    if (json.tileSystemSettings === null)
+      fail("`tileSystemSettings` is null");
+    if (typeof json.tileSystemSettings.seed !== "string")
+      fail("`tileSystemSettings.seed` is not a string");
+    if (!["permissive", "consensus", "wordlist", "freeapi"].includes(json.dictionaryType)) {
+      fail(`Unsupported dictionary type "${json.dictionaryType}"`);
     }
     const settings = Settings.forLanguage("");
     settings.version = json.version;
@@ -1184,7 +1215,7 @@ var en_default = {
       dictionary_options: {
         permissive: "Anything is a word",
         freeapi: "Free Dictionary API",
-        custom: "custom"
+        wordlist: "SWDICT word list"
       },
       dictionary_url_label: "URL:",
       tile_distribution: "Tile Distribution",
@@ -1445,7 +1476,7 @@ function parseGameParams(allParams) {
     throw new UrlError(t("error.url.no_random_seed"));
   settings.tileSystemSettings = { seed: seedParam };
   const dtParam = gameParams.get("dt");
-  if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "custom") {
+  if (dtParam === "permissive" || dtParam === "freeapi" || dtParam === "wordlist") {
     settings.dictionaryType = dtParam;
   } else if (dtParam) {
     throw new UrlError(t("error.url.unknown_dictionary_type", { type: dtParam }));
@@ -1453,7 +1484,7 @@ function parseGameParams(allParams) {
   const dsParam = gameParams.get("ds");
   if (dsParam)
     settings.dictionarySettings = dsParam;
-  else if (settings.dictionaryType === "custom") {
+  else if (settings.dictionaryType === "wordlist") {
     throw new UrlError(t("error.url.custom_dictionary_requires_url"));
   }
   let playerId = gameParams.get("pid") ?? undefined;
@@ -3086,8 +3117,8 @@ class PlayRejectedError extends Error {
 function makeDictionary(settings) {
   if (settings.dictionaryType === "permissive")
     return async (...words) => null;
-  if (settings.dictionaryType === "custom")
-    return makeCustomDictionary(settings);
+  if (settings.dictionaryType === "wordlist")
+    return makeListDictionary(settings);
   if (settings.dictionaryType === "freeapi") {
     let urlTemplate, dictionaryName;
     if (settings.dictionarySettings) {
@@ -3168,10 +3199,10 @@ async function checkWordUsingUrl(wordToCheck, url, dictionaryName) {
     throw new Error(`Could not reach ${dictionaryName} to validate "${wordToCheck}". Check connection or API status.`);
   }
 }
-function makeCustomDictionary(settings) {
+function makeListDictionary(settings) {
   const dictionarySettings = settings.dictionarySettings;
   if (typeof dictionarySettings !== "string") {
-    throw new TypeError(`Custom dictionary requires a string URL, not ${dictionarySettings}.`);
+    throw new TypeError(`Word list requires a string URL, not ${dictionarySettings}.`);
   }
   let wordListPromise = null;
   const getWordList = () => {
@@ -3189,7 +3220,7 @@ function makeCustomDictionary(settings) {
       wordListPromise = (async () => {
         const response = await fetch(dictionaryUrl);
         if (!response.ok) {
-          throw new Error(`Failed to fetch custom dictionary from ${dictionaryUrl}: ${response.statusText}`);
+          throw new Error(`Failed to fetch word list from ${dictionaryUrl}: ${response.statusText}`);
         }
         const buffer = await response.arrayBuffer();
         return new WordList(new Uint8Array(buffer));
@@ -4075,11 +4106,11 @@ class GameSetup {
       if (dictionaryValue === "permissive") {
         settings.dictionaryType = "permissive";
         settings.dictionarySettings = null;
-      } else if (dictionaryValue === "freeapi" || dictionaryValue === "custom") {
+      } else if (dictionaryValue === "freeapi" || dictionaryValue === "wordlist") {
         settings.dictionaryType = dictionaryValue;
         settings.dictionarySettings = this.dictionaryUrl.value || null;
       } else {
-        settings.dictionaryType = "custom";
+        settings.dictionaryType = "wordlist";
         settings.dictionarySettings = dictionaryValue;
       }
       const bagLanguage = this.tileDistribution.value;
@@ -4135,13 +4166,13 @@ class GameSetup {
   }
   _handleDictChange() {
     const selectedValue = this.dictionaryType.value;
-    if (selectedValue === "freeapi" || selectedValue === "custom") {
+    if (selectedValue === "freeapi" || selectedValue === "wordlist") {
       this.dictionaryUrlContainer.hidden = false;
-      this.dictionaryUrl.required = selectedValue === "custom";
+      this.dictionaryUrl.required = selectedValue === "wordlist";
     } else {
       this.dictionaryUrlContainer.hidden = true;
     }
-    if (selectedValue !== "custom" && selectedValue !== "freeapi") {
+    if (selectedValue !== "wordlist" && selectedValue !== "freeapi") {
       this.dictionaryUrl.value = "";
     }
   }
@@ -4158,7 +4189,7 @@ class GameSetup {
       this._updatePlayerList(players);
     }
     this.dictionaryType.value = this.gameState.settings.dictionaryType;
-    if (this.gameState.settings.dictionaryType === "custom" && typeof this.gameState.settings.dictionarySettings === "string" && this.dictionaryType.querySelector(`option[value="${this.gameState.settings.dictionarySettings}"]`)) {
+    if (this.gameState.settings.dictionaryType === "wordlist" && typeof this.gameState.settings.dictionarySettings === "string" && this.dictionaryType.querySelector(`option[value="${this.gameState.settings.dictionarySettings}"]`)) {
       this.dictionaryType.value = this.gameState.settings.dictionarySettings;
     }
     this._handleDictChange();
@@ -4182,12 +4213,12 @@ class GameSetup {
       this.tileDistribution.appendChild(option);
     }
     const bagParam = getBagParam(this.gameState.settings) ?? "";
-    const langMatch = bagParam.match(/^\.(.+)$/);
+    const langMatch = bagParam.match(/^([a-z][^.]+)$/);
     if (langMatch && hasBagDefaults(langMatch[1])) {
       this.tileDistribution.value = langMatch[1];
     } else {
       const option = this.doc.createElement("option");
-      option.value = "custom";
+      option.value = "wordlist";
       option.textContent = t("ui.settings.tile_distribution_options.custom");
       this.tileDistribution.appendChild(option);
       this.tileDistribution.value = "custom";
@@ -5203,10 +5234,9 @@ if (typeof window !== "undefined") {
               <select id="dictionary-type">
                 <option value="permissive" data-i18n="ui.settings.dictionary_options.permissive"></option>
                 <option value="freeapi" data-i18n="ui.settings.dictionary_options.freeapi"></option>
-                                <option value="en.linux-10k">Cygwin English 10k</option>
-                <option value="en.linux">Cygwin English</option>
+                                <option value="en.yawl">English YAWL</option>
                 <option value="test">Test Dictionary</option>
-                <option value="custom" data-i18n="ui.settings.dictionary_options.custom"></option>
+                <option value="wordlist" data-i18n="ui.settings.dictionary_options.wordlist"></option>
               </select>
               <div id="dictionary-url-container" hidden>
                 <label data-i18n="ui.settings.dictionary_url_label"><input type="text" id="dictionary-url" placeholder="URL"></label>
