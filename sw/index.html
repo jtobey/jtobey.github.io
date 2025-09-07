@@ -204,6 +204,29 @@ limitations under the License.
   opacity: .4;
 }
 
+.info-popup {
+  position: absolute;
+  z-index: 1001;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  padding: 10px;
+  box-shadow: 0 2px 10px #0003;
+}
+
+.info-popup h3 {
+  margin-top: 0;
+}
+
+.info-popup ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.info-popup li {
+  margin-bottom: 5px;
+}
+
 @media (min-width: 1024px) {
   #game-container {
     flex-direction: row;
@@ -370,6 +393,12 @@ dialog button {
   dialog {
     color: #eee;
     background-color: #222;
+    border-color: #555;
+  }
+
+  .info-popup {
+    color: #eee;
+    background-color: #333;
     border-color: #555;
   }
 }
@@ -1723,6 +1752,44 @@ class Board extends EventTarget {
       blanks
     };
   }
+  getWordsAt(row, col) {
+    const words = [];
+    const square = this.squares[row]?.[col];
+    if (!square?.tile) {
+      return [];
+    }
+    let startCol = col;
+    while (this.squares[row]?.[startCol - 1]?.tile) {
+      startCol--;
+    }
+    let endCol = col;
+    while (this.squares[row]?.[endCol + 1]?.tile) {
+      endCol++;
+    }
+    if (startCol !== endCol) {
+      let word = "";
+      for (let c = startCol;c <= endCol; c++) {
+        word += this.squares[row][c].letter;
+      }
+      words.push(word);
+    }
+    let startRow = row;
+    while (this.squares[startRow - 1]?.[col]?.tile) {
+      startRow--;
+    }
+    let endRow = row;
+    while (this.squares[endRow + 1]?.[col]?.tile) {
+      endRow++;
+    }
+    if (startRow !== endRow) {
+      let word = "";
+      for (let r = startRow;r <= endRow; r++) {
+        word += this.squares[r][col].letter;
+      }
+      words.push(word);
+    }
+    return words;
+  }
   placeTiles(...placements) {
     for (const placement of placements) {
       const square = this.squares[placement.row]?.[placement.col];
@@ -2916,18 +2983,14 @@ class Pointer {
     this.checkEnd(1);
     return this.uint8Array[this._offset++];
   }
-  varintNumber() {
-    let ret = 0, shift = 0;
+  varintBigInt() {
+    let ret = 0n, shift = 0n;
     while (true) {
       const byte = this.byte();
-      const payload = byte & 127;
-      if (shift === 49 && (payload > 15 || payload && shift > 49)) {
-        throw new RangeError(`Varint too large for number at offset ${this.offset}.`);
-      }
-      ret += (byte & 127) << shift;
+      ret += BigInt(byte & 127) << shift;
       if (!(byte & 128))
         return ret;
-      shift += 7;
+      shift += 7n;
     }
   }
   skipToVarint() {
@@ -2938,11 +3001,12 @@ class Pointer {
     }
   }
   skip(numberOfBytes) {
-    const offset = this._offset + numberOfBytes;
+    const offset = this._offset + Number(numberOfBytes);
     this.checkOffset(offset);
     this._offset = offset;
   }
   view(numberOfBytes) {
+    numberOfBytes = Number(numberOfBytes);
     const result = this.uint8Array.subarray(this._offset, this._offset + numberOfBytes);
     this.skip(numberOfBytes);
     return result;
@@ -2950,8 +3014,8 @@ class Pointer {
 }
 
 // dict/word_list.ts
-var METADATA_FIELD_NUMBER = 1;
-var INSTRUCTIONS_FIELD_NUMBER = 2;
+var METADATA_FIELD_NUMBER = 1n;
+var INSTRUCTIONS_FIELD_NUMBER = 2n;
 
 class InvalidLexiconError extends Error {
   constructor(message) {
@@ -2960,26 +3024,38 @@ class InvalidLexiconError extends Error {
   }
 }
 
+class WordListEntry extends String {
+  elements;
+  constructor(macros, elements) {
+    super(elements.map((elt) => macros[Number(elt[elt.length - 1])].subword).join(""));
+    this.elements = elements;
+  }
+}
+function* toBigInts(numbers) {
+  for (const n of numbers)
+    yield BigInt(n);
+}
+
 class WordList {
   _metadata;
   instructions;
-  constructor(arrayBuffer) {
-    const lexiconMessage = new Uint8Array(arrayBuffer);
-    const pointer = new Pointer(lexiconMessage);
+  constructor(lexiconMessage) {
+    const lexiconMessageArray = new Uint8Array(lexiconMessage);
+    const pointer = new Pointer(lexiconMessageArray);
     let insns = null;
     let metadata = null;
     while (!pointer.atEnd) {
-      const tag = pointer.varintNumber();
-      const fieldNumber = tag >>> 3;
-      const wireType = tag & 7;
-      if (wireType === 0)
-        pointer.varintNumber();
-      else if (wireType === 1)
+      const tag = pointer.varintBigInt();
+      const fieldNumber = tag >> 3n;
+      const wireType = tag & 7n;
+      if (wireType === 0n)
+        pointer.varintBigInt();
+      else if (wireType === 1n)
         pointer.skip(8);
-      else if (wireType === 5)
+      else if (wireType === 5n)
         pointer.skip(4);
-      else if (wireType === 2) {
-        const len = pointer.varintNumber();
+      else if (wireType === 2n) {
+        const len = pointer.varintBigInt();
         if (fieldNumber === METADATA_FIELD_NUMBER) {
           metadata = Metadata.decode(pointer.view(len));
         } else if (fieldNumber === INSTRUCTIONS_FIELD_NUMBER) {
@@ -3028,7 +3104,8 @@ class WordList {
     visiting.delete(macroIndex);
     visited.add(macroIndex);
   }
-  *scanFrom(ip, wordBuffer = []) {
+  *scanFrom(ip) {
+    const wordBuffer = [[]];
     const stack = [this.readInstructions(ip)];
     while (stack.length > 0) {
       const it = stack[stack.length - 1];
@@ -3037,31 +3114,34 @@ class WordList {
         stack.pop();
         continue;
       }
-      const macroIndex = next.value;
-      const insn = this.macros[macroIndex];
-      if (!insn) {
-        throw new InvalidLexiconError(`Instruction ${macroIndex} out of range [0, ${this.macros.length - 1}).`);
-      }
-      if (insn.subword !== undefined) {
-        wordBuffer.push(insn.subword);
-      } else if (insn.subroutine) {
-        stack.push(insn.subroutine.instructions[Symbol.iterator]());
-      } else {
-        yield wordBuffer.join("");
-        if (insn.clear) {
-          wordBuffer.length = 0;
-        } else if (insn.backup !== undefined) {
-          wordBuffer.length -= insn.backup;
+      const instruction = next.value;
+      wordBuffer[wordBuffer.length - 1].push(instruction);
+      const macro = this.macros[Number(instruction)];
+      if (macro) {
+        if (macro.subroutine) {
+          stack.push(toBigInts(macro.subroutine.instructions));
+          continue;
         }
+        if (macro.clear || macro.backup !== undefined) {
+          yield new WordListEntry(this.macros, wordBuffer.slice(0, -1));
+          if (macro.clear) {
+            wordBuffer.length = 0;
+          } else {
+            wordBuffer.length -= macro.backup + 1;
+          }
+        } else if (macro.subword === undefined) {
+          continue;
+        }
+        wordBuffer.push([]);
       }
     }
-    if (wordBuffer.length) {
-      yield wordBuffer.join("");
+    if (wordBuffer[0].length) {
+      yield new WordListEntry(this.macros, wordBuffer.slice(0, -1));
     }
   }
   *readInstructions(ip) {
     while (!ip.atEnd) {
-      yield ip.varintNumber();
+      yield ip.varintBigInt();
     }
   }
   [Symbol.iterator]() {
@@ -3079,7 +3159,7 @@ class WordList {
         const probe = new Pointer(this.instructions, midBlock * blockSize);
         probe.skipToVarint();
         while (!probe.atEnd) {
-          if (this.macros[probe.varintNumber()].clear)
+          if (this.macros[Number(probe.varintBigInt())]?.clear)
             break;
         }
         if (probe.atEnd || probe.offset >= hiBlock * blockSize)
@@ -3923,6 +4003,21 @@ class GameState extends EventTarget {
     }
     await this.playTurns(this.shared.turnsFromParams(iterator, turnNumber));
   }
+  getWordsAt(row, col) {
+    const board = this.board;
+    const tempBoard = new board.constructor(...board.toJSON().rows);
+    tempBoard.copyFrom(board);
+    for (const placement of this.tilesHeld) {
+      if (isBoardPlacement(placement)) {
+        const square = tempBoard.squares[placement.row]?.[placement.col];
+        if (square) {
+          square.tile = placement.tile;
+          square.assignedLetter = placement.assignedLetter;
+        }
+      }
+    }
+    return tempBoard.getWordsAt(row, col);
+  }
   static async fromParams(params, baseUrl = "http://localhost/") {
     const { settings, playerId, turnParams } = parseGameParams(params);
     settings.baseUrl = baseUrl;
@@ -4586,6 +4681,49 @@ class View {
   getBoardContainer() {
     return this.boardContainer;
   }
+  showInfoPopup(words, targetElement) {
+    const popup = this.doc.createElement("div");
+    popup.className = "info-popup";
+    const title = this.doc.createElement("h3");
+    title.textContent = "Word Definitions";
+    popup.appendChild(title);
+    const list = this.doc.createElement("ul");
+    words.forEach((word) => {
+      const item = this.doc.createElement("li");
+      const link = this.doc.createElement("a");
+      link.href = `https://en.wiktionary.org/wiki/${word.toLowerCase()}`;
+      link.textContent = word;
+      link.target = "_blank";
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+    popup.appendChild(list);
+    const close = () => {
+      if (popup.parentNode) {
+        popup.parentNode.removeChild(popup);
+      }
+      this.doc.removeEventListener("pointerdown", pointerdown);
+      this.boardContainer.removeEventListener("pointerdown", pointerdown);
+      this.doc.removeEventListener("keydown", keydown);
+    };
+    const pointerdown = (e) => {
+      if (!popup.contains(e.target)) {
+        close();
+      }
+    };
+    const keydown = (e) => {
+      if (e.key === "Escape") {
+        close();
+      }
+    };
+    this.doc.body.appendChild(popup);
+    const rect = targetElement.getBoundingClientRect();
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.bottom}px`;
+    this.doc.addEventListener("pointerdown", pointerdown);
+    this.boardContainer.addEventListener("pointerdown", pointerdown);
+    this.doc.addEventListener("keydown", keydown);
+  }
 }
 
 // controller/key_handler.ts
@@ -4746,12 +4884,34 @@ class PointerHandler {
   panX = 0;
   panY = 0;
   lastTap = 0;
+  longTapTimeout = 500;
+  longTapInfo = null;
+  currentTapTarget = null;
+  longTapPoppedUp = false;
   constructor(gameState, view) {
     this.gameState = gameState;
     this.view = view;
   }
   scrollWindowBy(dx, dy) {
     window.scrollBy(dx, dy);
+  }
+  handleLongTap() {
+    if (!this.longTapInfo || !this.currentTapTarget)
+      return;
+    const { row, col, element } = this.currentTapTarget;
+    let popupShown = false;
+    if (isBoardPlacementRow(row)) {
+      const words = this.gameState.getWordsAt(row, col);
+      if (words.length > 0) {
+        this.view.showInfoPopup(words, element);
+        popupShown = true;
+      }
+    }
+    this.pointerInfoMap.delete(this.longTapInfo.pointerId);
+    if (popupShown) {
+      this.longTapPoppedUp = true;
+    }
+    this.longTapInfo = null;
   }
   findNearestRackOrExchangeSpot(container, clientX, clientY) {
     let bestSpot = null;
@@ -4790,6 +4950,11 @@ class PointerHandler {
     };
   }
   pointerCancel(evt) {
+    if (this.longTapInfo?.pointerId === evt.pointerId) {
+      window.clearTimeout(this.longTapInfo.timer);
+      this.longTapInfo = null;
+    }
+    this.currentTapTarget = null;
     const info = this.pointerInfoMap.get(evt.pointerId);
     if (info)
       console.debug(`Pointer cancel: ${evt.pointerId} (${info.x.toFixed(2)},${info.y.toFixed(2)})`);
@@ -4807,22 +4972,37 @@ class PointerHandler {
       y: evt.clientY,
       pointerMoved: false
     };
-    const tileTarget = target.closest(".tile, .placed");
+    let tileTarget = target.closest(".tile, .placed");
+    if (!tileTarget) {
+      const square = target.closest(".square");
+      if (square?.querySelector(".letter")) {
+        tileTarget = square;
+      }
+    }
     if (tileTarget instanceof HTMLElement) {
       evt.preventDefault();
       evt.stopPropagation();
       const col = parseInt(tileTarget.dataset.col, 10);
       const rowStr = tileTarget.dataset.row;
       const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
+      this.currentTapTarget = { row, col, element: tileTarget };
       const dragInfo = {
         ...tapInfo,
         draggingTile: { row, col, element: tileTarget },
         ghostTile: null
       };
       this.pointerInfoMap.set(evt.pointerId, dragInfo);
+      if (this.longTapInfo) {
+        window.clearTimeout(this.longTapInfo.timer);
+      }
+      this.longTapInfo = {
+        timer: window.setTimeout(() => this.handleLongTap(), this.longTapTimeout),
+        pointerId: evt.pointerId
+      };
     } else if (target.closest("#board-container")) {
       evt.preventDefault();
       evt.stopPropagation();
+      this.currentTapTarget = null;
       const panInfo = {
         ...tapInfo,
         draggingTile: null
@@ -4837,6 +5017,10 @@ class PointerHandler {
     evt.preventDefault();
     if (!info.pointerMoved && Math.hypot(evt.clientX - info.downX, evt.clientY - info.downY) > 5) {
       info.pointerMoved = true;
+      if (this.longTapInfo?.pointerId === evt.pointerId) {
+        window.clearTimeout(this.longTapInfo.timer);
+        this.longTapInfo = null;
+      }
     }
     if (!info.draggingTile) {
       const panningPointerInfos = [...this.pointerInfoMap.values().filter((anyInfo) => !anyInfo.draggingTile)];
@@ -4911,10 +5095,18 @@ class PointerHandler {
     info.y = evt.clientY;
   }
   pointerUp(evt) {
+    if (this.longTapPoppedUp) {
+      this.longTapPoppedUp = false;
+      return;
+    }
+    if (this.longTapInfo?.pointerId === evt.pointerId) {
+      window.clearTimeout(this.longTapInfo.timer);
+      this.longTapInfo = null;
+    }
+    this.currentTapTarget = null;
     const info = this.pointerInfoMap.get(evt.pointerId);
     if (!info)
       return;
-    const target = evt.target;
     if (info.draggingTile && info.ghostTile) {
       const dropTarget = this.view.getDropTarget(evt.pointerId);
       if (dropTarget) {
@@ -4940,7 +5132,7 @@ class PointerHandler {
       }
       this.view.removeGhostTile(info.ghostTile);
       info.draggingTile.element.classList.remove("dragging");
-    } else if (target.closest("#board-container") && !info.pointerMoved) {
+    } else if (evt.target.closest("#board-container") && !info.pointerMoved) {
       const now = Date.now();
       if (now - this.lastTap < 300) {
         if (this.scale > 1) {
@@ -4959,7 +5151,7 @@ class PointerHandler {
           };
           this.scale = 1.8;
           const boardRect = this.view.getBoardContainer().getBoundingClientRect();
-          const square = target.closest(".square")?.getBoundingClientRect();
+          const square = evt.target.closest(".square")?.getBoundingClientRect();
           const boardX = toBoardCoordinate(evt.clientX, boardRect.left, boardRect.right, square ? square.right - square.left : 0);
           const boardY = toBoardCoordinate(evt.clientY, boardRect.top, boardRect.bottom, square ? square.bottom - square.top : 0);
           this.panX = boardX * (1 - this.scale) / this.scale;
@@ -5220,7 +5412,7 @@ class App {
   }
   initDebug() {
     const app = this;
-    for (const level of ["log", "warn", "error", "info"]) {
+    for (const level of ["debug", "log", "warn", "error", "info"]) {
       const original = console[level];
       console[level] = function(...args) {
         original.apply(console, args);
