@@ -4005,7 +4005,7 @@ class GameState extends EventTarget {
   }
   getWordsAt(row, col) {
     const board = this.board;
-    const tempBoard = new board.constructor(...board.toJSON().rows);
+    const tempBoard = new Board(...board.toJSON().rows);
     tempBoard.copyFrom(board);
     for (const placement of this.tilesHeld) {
       if (isBoardPlacement(placement)) {
@@ -4016,7 +4016,7 @@ class GameState extends EventTarget {
         }
       }
     }
-    return tempBoard.getWordsAt(row, col);
+    return tempBoard.getWordsAt(row, col).map((s) => s.toLowerCase());
   }
   static async fromParams(params, baseUrl = "http://localhost/") {
     const { settings, playerId, turnParams } = parseGameParams(params);
@@ -4380,8 +4380,10 @@ class View {
   gameSetup;
   dropTargetMap = new Map;
   doc;
+  window;
   constructor(gameState, browser) {
     this.gameState = gameState;
+    this.window = browser.getWindow();
     this.doc = browser.getDocument();
     this.gameContainer = this.doc.getElementById("game-container");
     this.boardContainer = this.gameContainer.querySelector("#board-container");
@@ -4691,35 +4693,50 @@ class View {
     words.forEach((word) => {
       const item = this.doc.createElement("li");
       const link = this.doc.createElement("a");
-      link.href = `https://en.wiktionary.org/wiki/${word.toLowerCase()}`;
+      link.href = `https://en.wiktionary.org/wiki/${word}`;
       link.textContent = word;
       link.target = "_blank";
       item.appendChild(link);
       list.appendChild(item);
     });
     popup.appendChild(list);
-    const close = () => {
+    const close = (isPopState) => {
       if (popup.parentNode) {
         popup.parentNode.removeChild(popup);
       }
       this.doc.removeEventListener("pointerdown", pointerdown);
       this.boardContainer.removeEventListener("pointerdown", pointerdown);
       this.doc.removeEventListener("keydown", keydown);
+      this.window.removeEventListener("popstate", onPopState);
+      if (!isPopState) {
+        this.window.history.back();
+        this.window.location.hash = this.window.history.state;
+      }
+    };
+    const onPopState = () => {
+      close(true);
     };
     const pointerdown = (e) => {
       if (!popup.contains(e.target)) {
-        close();
+        close(false);
       }
     };
     const keydown = (e) => {
       if (e.key === "Escape") {
-        close();
+        close(false);
       }
     };
     this.doc.body.appendChild(popup);
     const rect = targetElement.getBoundingClientRect();
     popup.style.left = `${rect.left}px`;
     popup.style.top = `${rect.bottom}px`;
+    const hash = window.location.hash;
+    const params = new URLSearchParams(hash?.substring(1) || "");
+    if (params.get("view") !== "info-popup") {
+      params.set("view", "info-popup");
+      window.history.pushState(hash, "", "#" + params);
+    }
+    window.addEventListener("popstate", onPopState);
     this.doc.addEventListener("pointerdown", pointerdown);
     this.boardContainer.addEventListener("pointerdown", pointerdown);
     this.doc.addEventListener("keydown", keydown);
@@ -5287,6 +5304,9 @@ class DomBrowser {
   getDocument() {
     return document;
   }
+  getWindow() {
+    return window;
+  }
   getURLSearchParams(query) {
     return new URLSearchParams(query);
   }
@@ -5338,17 +5358,18 @@ class App {
     await loadTranslations(...this.browser.languages);
     initI18n(this.browser.getDocument());
     const handleGameChange = async () => {
-      const params = this.browser.getURLSearchParams(this.browser.getHash()?.substring(1) || "");
+      const hash = this.browser.getHash()?.substring(1) || "";
+      const params = new URLSearchParams(hash);
+      params.delete("view");
       const gidParam = params.get("gid");
-      const gameId = gidParam ? toGameId(gidParam) : makeGameId();
-      if (this.gameState?.gameId === gameId) {
-        const hash = this.browser.getHash()?.substring(1);
+      if (gidParam && this.gameState?.gameId === toGameId(gidParam)) {
         const paramsStr = this.gameState.turnUrlParams.toString();
         if (hash !== paramsStr) {
           await this.gameState.applyTurnParams(params);
         }
         return;
       }
+      const gameId = gidParam ? toGameId(gidParam) : makeGameId();
       const savedGame = gidParam && this.browser.localStorage.getItem(makeStorageKey(gidParam));
       if (savedGame) {
         console.log(`Loaded ${gameId} from local storage${this.gameState ? "; switching from " + this.gameState.gameId + " to it" : ""}.`);
