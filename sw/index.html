@@ -4988,7 +4988,13 @@ class PointerHandler {
       y: evt.clientY,
       pointerMoved: false
     };
+    const panInfo = {
+      ...tapInfo,
+      draggingTile: null
+    };
+    this.pointerInfoMap.set(evt.pointerId, panInfo);
     let tileTarget = target.closest(".tile, .placed");
+    const tileTargetIsMovable = Boolean(tileTarget);
     if (!tileTarget) {
       const square = target.closest(".square");
       if (square?.querySelector(".letter")) {
@@ -5001,13 +5007,15 @@ class PointerHandler {
       const col = parseInt(tileTarget.dataset.col, 10);
       const rowStr = tileTarget.dataset.row;
       const row = rowStr === "rack" ? "rack" : rowStr === "exchange" ? "exchange" : parseInt(rowStr, 10);
+      if (tileTargetIsMovable) {
+        const dragInfo = {
+          ...tapInfo,
+          draggingTile: { row, col, element: tileTarget },
+          ghostTile: null
+        };
+        this.pointerInfoMap.set(evt.pointerId, dragInfo);
+      }
       this.currentTapTarget = { row, col, element: tileTarget };
-      const dragInfo = {
-        ...tapInfo,
-        draggingTile: { row, col, element: tileTarget },
-        ghostTile: null
-      };
-      this.pointerInfoMap.set(evt.pointerId, dragInfo);
       if (this.longTapInfo) {
         window.clearTimeout(this.longTapInfo.timer);
       }
@@ -5019,11 +5027,6 @@ class PointerHandler {
       evt.preventDefault();
       evt.stopPropagation();
       this.currentTapTarget = null;
-      const panInfo = {
-        ...tapInfo,
-        draggingTile: null
-      };
-      this.pointerInfoMap.set(evt.pointerId, panInfo);
     }
   }
   pointerMove(evt) {
