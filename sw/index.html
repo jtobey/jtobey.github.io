@@ -3384,29 +3384,29 @@ async function checkWordUsingUrl(wordToCheck, url, dictionaryName) {
 
 class ListDictionary extends Dictionary {
   settings;
-  baseUrl;
+  dictionaryId;
   wordListPromise = null;
   wordList = null;
   constructor(settings) {
     super();
+    this.settings = settings;
     const dictionarySettings = settings.dictionarySettings;
     if (typeof dictionarySettings !== "string") {
       throw new TypeError(`Word list requires a string URL, not ${dictionarySettings}.`);
     }
-    this.settings = dictionarySettings;
-    this.baseUrl = settings.baseUrl;
+    this.dictionaryId = dictionarySettings;
   }
   getWordList() {
     if (!this.wordListPromise) {
       let dictionaryUrl;
       try {
-        dictionaryUrl = new URL(this.settings).href;
+        dictionaryUrl = new URL(this.dictionaryId).href;
       } catch (e) {
         if (!(e instanceof TypeError))
           throw e;
-        const maybeSuffix = this.settings.slice(-SWDICT_SUFFIX.length) === SWDICT_SUFFIX ? "" : SWDICT_SUFFIX;
-        const relativeUrl = this.settings + maybeSuffix;
-        dictionaryUrl = new URL(relativeUrl, new URL("dict/", this.baseUrl)).href;
+        const maybeSuffix = this.dictionaryId.slice(-SWDICT_SUFFIX.length) === SWDICT_SUFFIX ? "" : SWDICT_SUFFIX;
+        const relativeUrl = this.dictionaryId + maybeSuffix;
+        dictionaryUrl = new URL(relativeUrl, new URL("dict/", this.settings.baseUrl)).href;
       }
       this.wordListPromise = (async () => {
         const response = await fetch(dictionaryUrl);
@@ -3428,7 +3428,7 @@ class ListDictionary extends Dictionary {
       return this.checkWordsAsync(...words);
     }
     const wordList = this.wordList;
-    const dictionaryName = wordList.metadata?.name || this.settings;
+    const dictionaryName = wordList.metadata?.name || this.dictionaryId;
     const errors = words.map((word) => {
       if (!wordList.has(word.toLowerCase())) {
         return new WordNotFoundError(word, dictionaryName);
