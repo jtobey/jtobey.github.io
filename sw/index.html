@@ -133,6 +133,10 @@ limitations under the License.
   background-color: #90ee90b3 !important;
 }
 
+.square.latest {
+  background-color: #f99 !important;
+}
+
 .square.dl {
   background-color: #c99;
 }
@@ -225,6 +229,19 @@ limitations under the License.
 
 .info-popup li {
   margin-bottom: 5px;
+}
+
+.throbber {
+  position: fixed;
+  color: #fff;
+  z-index: 1002;
+  background-color: #000000b3;
+  border-radius: 10px;
+  padding: 20px;
+  font-size: 1.2em;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .toast {
@@ -374,6 +391,10 @@ dialog button {
 
   .placed {
     background-color: #228822b3 !important;
+  }
+
+  .square.latest {
+    background-color: #c33 !important;
   }
 
   .square.dl {
@@ -1322,6 +1343,9 @@ var en_default = {
       play_word_title: "Play word?",
       play_word_details: "${word} for ${score} points"
     },
+    throbber: {
+      downloading_dictionary: "Downloading dictionary..."
+    },
     game: {
       join_link: "join"
     }
@@ -1607,6 +1631,7 @@ class Square {
   wordBonus;
   tile;
   assignedLetter;
+  turnNumber;
   constructor({
     row,
     col,
@@ -1854,7 +1879,7 @@ class Board extends EventTarget {
     }
     return words;
   }
-  placeTiles(...placements) {
+  placeTiles(placements, turnNumber) {
     for (const placement of placements) {
       const square = this.squares[placement.row]?.[placement.col];
       if (!square)
@@ -1867,6 +1892,7 @@ class Board extends EventTarget {
       if (square) {
         square.tile = placement.tile;
         square.assignedLetter = placement.assignedLetter;
+        square.turnNumber = turnNumber;
         this.dispatchEvent(new BoardEvent("tileplaced", { detail: { placement } }));
       }
     }
@@ -1895,35 +1921,17 @@ class Board extends EventTarget {
     }
     if (!(typeof json === "object"))
       fail("Not an object");
-    if (!arraysEqual([...Object.keys(json)], ["rows", "tiles", "scores"]))
+    delete json.tiles;
+    if (!arraysEqual([...Object.keys(json)], ["rows", "scores"]))
       fail("Wrong keys or key order");
     if (!Array.isArray(json.rows))
       fail("Rows are not an array");
     if (!json.rows.every((row) => typeof row === "string"))
       fail("Row element is not a string");
-    if (!Array.isArray(json.tiles))
-      fail("Tiles are not an array");
     if (!Array.isArray(json.scores))
       fail("Scores are not an array");
     try {
       const board = new Board(...json.rows);
-      for (const tile of json.tiles) {
-        if (!Array.isArray(tile))
-          fail("Tile is not an array");
-        if (tile.length > 4)
-          fail("Wrong size array for tile");
-        const [row, col, tileJson, assignedLetter] = tile;
-        if (!(typeof row === "number"))
-          fail("Tile row is not a number");
-        if (!(typeof col === "number"))
-          fail("Tile col is not a number");
-        const square = board.squares[row]?.[col];
-        if (!square)
-          fail("Tile coordinates are off the board");
-        square.tile = Tile.fromJSON(tileJson);
-        if (assignedLetter)
-          square.assignedLetter = assignedLetter;
-      }
       for (const element of json.scores) {
         if (!Array.isArray(element))
           fail("Score is not an array");
@@ -2569,13 +2577,59 @@ function assertFloat32(arg) {
 }
 
 // dict/swdict.ts
+function createBaseInlineMetadata() {
+  return { bigint: undefined };
+}
+var InlineMetadata = {
+  encode(message, writer = new BinaryWriter) {
+    if (message.bigint !== undefined) {
+      writer.uint32(10).bytes(message.bigint);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInlineMetadata();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+          message.bigint = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+  fromJSON(object) {
+    return { bigint: isSet(object.bigint) ? bytesFromBase64(object.bigint) : undefined };
+  },
+  toJSON(message) {
+    const obj = {};
+    if (message.bigint !== undefined) {
+      obj.bigint = base64FromBytes(message.bigint);
+    }
+    return obj;
+  },
+  create(base) {
+    return InlineMetadata.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseInlineMetadata();
+    message.bigint = object.bigint ?? undefined;
+    return message;
+  }
+};
 function createBaseMacro() {
-  return {
-    clear: undefined,
-    subword: undefined,
-    backup: undefined,
-    subroutine: undefined
-  };
+  return { clear: undefined, subword: undefined, pop: undefined, subroutine: undefined, inlineMetadata: undefined };
 }
 var Macro = {
   encode(message, writer = new BinaryWriter) {
@@ -2585,11 +2639,14 @@ var Macro = {
     if (message.subword !== undefined) {
       writer.uint32(18).string(message.subword);
     }
-    if (message.backup !== undefined) {
-      writer.uint32(24).uint64(message.backup);
+    if (message.pop !== undefined) {
+      writer.uint32(24).uint64(message.pop);
     }
     if (message.subroutine !== undefined) {
       Macro_Subroutine.encode(message.subroutine, writer.uint32(34).fork()).join();
+    }
+    if (message.inlineMetadata !== undefined) {
+      InlineMetadata.encode(message.inlineMetadata, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -2618,7 +2675,7 @@ var Macro = {
           if (tag !== 24) {
             break;
           }
-          message.backup = longToNumber(reader.uint64());
+          message.pop = longToNumber(reader.uint64());
           continue;
         }
         case 4: {
@@ -2626,6 +2683,13 @@ var Macro = {
             break;
           }
           message.subroutine = Macro_Subroutine.decode(reader, reader.uint32());
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+          message.inlineMetadata = InlineMetadata.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -2640,8 +2704,9 @@ var Macro = {
     return {
       clear: isSet(object.clear) ? Macro_Clear.fromJSON(object.clear) : undefined,
       subword: isSet(object.subword) ? globalThis.String(object.subword) : undefined,
-      backup: isSet(object.backup) ? globalThis.Number(object.backup) : undefined,
-      subroutine: isSet(object.subroutine) ? Macro_Subroutine.fromJSON(object.subroutine) : undefined
+      pop: isSet(object.pop) ? globalThis.Number(object.pop) : undefined,
+      subroutine: isSet(object.subroutine) ? Macro_Subroutine.fromJSON(object.subroutine) : undefined,
+      inlineMetadata: isSet(object.inlineMetadata) ? InlineMetadata.fromJSON(object.inlineMetadata) : undefined
     };
   },
   toJSON(message) {
@@ -2652,11 +2717,14 @@ var Macro = {
     if (message.subword !== undefined) {
       obj.subword = message.subword;
     }
-    if (message.backup !== undefined) {
-      obj.backup = Math.round(message.backup);
+    if (message.pop !== undefined) {
+      obj.pop = Math.round(message.pop);
     }
     if (message.subroutine !== undefined) {
       obj.subroutine = Macro_Subroutine.toJSON(message.subroutine);
+    }
+    if (message.inlineMetadata !== undefined) {
+      obj.inlineMetadata = InlineMetadata.toJSON(message.inlineMetadata);
     }
     return obj;
   },
@@ -2667,8 +2735,9 @@ var Macro = {
     const message = createBaseMacro();
     message.clear = object.clear !== undefined && object.clear !== null ? Macro_Clear.fromPartial(object.clear) : undefined;
     message.subword = object.subword ?? undefined;
-    message.backup = object.backup ?? undefined;
+    message.pop = object.pop ?? undefined;
     message.subroutine = object.subroutine !== undefined && object.subroutine !== null ? Macro_Subroutine.fromPartial(object.subroutine) : undefined;
+    message.inlineMetadata = object.inlineMetadata !== undefined && object.inlineMetadata !== null ? InlineMetadata.fromPartial(object.inlineMetadata) : undefined;
     return message;
   }
 };
@@ -2710,15 +2779,13 @@ var Macro_Clear = {
   }
 };
 function createBaseMacro_Subroutine() {
-  return { instructions: [] };
+  return { data: new Uint8Array(0) };
 }
 var Macro_Subroutine = {
   encode(message, writer = new BinaryWriter) {
-    writer.uint32(10).fork();
-    for (const v2 of message.instructions) {
-      writer.uint64(v2);
+    if (message.data.length !== 0) {
+      writer.uint32(10).bytes(message.data);
     }
-    writer.join();
     return writer;
   },
   decode(input, length) {
@@ -2729,18 +2796,62 @@ var Macro_Subroutine = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1: {
-          if (tag === 8) {
-            message.instructions.push(longToNumber(reader.uint64()));
-            continue;
+          if (tag !== 10) {
+            break;
           }
-          if (tag === 10) {
-            const end2 = reader.uint32() + reader.pos;
-            while (reader.pos < end2) {
-              message.instructions.push(longToNumber(reader.uint64()));
-            }
-            continue;
+          message.data = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+  fromJSON(object) {
+    return { data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0) };
+  },
+  toJSON(message) {
+    const obj = {};
+    if (message.data.length !== 0) {
+      obj.data = base64FromBytes(message.data);
+    }
+    return obj;
+  },
+  create(base) {
+    return Macro_Subroutine.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseMacro_Subroutine();
+    message.data = object.data ?? new Uint8Array(0);
+    return message;
+  }
+};
+function createBaseSortalike() {
+  return { subwords: [] };
+}
+var Sortalike = {
+  encode(message, writer = new BinaryWriter) {
+    for (const v2 of message.subwords) {
+      writer.uint32(10).string(v2);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSortalike();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
           }
-          break;
+          message.subwords.push(reader.string());
+          continue;
         }
       }
       if ((tag & 7) === 4 || tag === 0) {
@@ -2752,22 +2863,22 @@ var Macro_Subroutine = {
   },
   fromJSON(object) {
     return {
-      instructions: globalThis.Array.isArray(object?.instructions) ? object.instructions.map((e) => globalThis.Number(e)) : []
+      subwords: globalThis.Array.isArray(object?.subwords) ? object.subwords.map((e) => globalThis.String(e)) : []
     };
   },
   toJSON(message) {
     const obj = {};
-    if (message.instructions?.length) {
-      obj.instructions = message.instructions.map((e) => Math.round(e));
+    if (message.subwords?.length) {
+      obj.subwords = message.subwords;
     }
     return obj;
   },
   create(base) {
-    return Macro_Subroutine.fromPartial(base ?? {});
+    return Sortalike.fromPartial(base ?? {});
   },
   fromPartial(object) {
-    const message = createBaseMacro_Subroutine();
-    message.instructions = object.instructions?.map((e) => e) || [];
+    const message = createBaseSortalike();
+    message.subwords = object.subwords?.map((e) => e) || [];
     return message;
   }
 };
@@ -2779,7 +2890,8 @@ function createBaseMetadata() {
     macros: [],
     subwordFrequencies: new Map,
     languageCodes: [],
-    wordCount: 0
+    wordCount: 0,
+    sortalikes: []
   };
 }
 var Metadata = {
@@ -2804,6 +2916,9 @@ var Metadata = {
     }
     if (message.wordCount !== 0) {
       writer.uint32(56).uint64(message.wordCount);
+    }
+    for (const v2 of message.sortalikes) {
+      Sortalike.encode(v2, writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -2866,6 +2981,13 @@ var Metadata = {
           message.wordCount = longToNumber(reader.uint64());
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+          message.sortalikes.push(Sortalike.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2885,7 +3007,8 @@ var Metadata = {
         return acc;
       }, new Map) : new Map,
       languageCodes: globalThis.Array.isArray(object?.languageCodes) ? object.languageCodes.map((e) => globalThis.String(e)) : [],
-      wordCount: isSet(object.wordCount) ? globalThis.Number(object.wordCount) : 0
+      wordCount: isSet(object.wordCount) ? globalThis.Number(object.wordCount) : 0,
+      sortalikes: globalThis.Array.isArray(object?.sortalikes) ? object.sortalikes.map((e) => Sortalike.fromJSON(e)) : []
     };
   },
   toJSON(message) {
@@ -2914,6 +3037,9 @@ var Metadata = {
     if (message.wordCount !== 0) {
       obj.wordCount = Math.round(message.wordCount);
     }
+    if (message.sortalikes?.length) {
+      obj.sortalikes = message.sortalikes.map((e) => Sortalike.toJSON(e));
+    }
     return obj;
   },
   create(base) {
@@ -2936,6 +3062,7 @@ var Metadata = {
     })();
     message.languageCodes = object.languageCodes?.map((e) => e) || [];
     message.wordCount = object.wordCount ?? 0;
+    message.sortalikes = object.sortalikes?.map((e) => Sortalike.fromPartial(e)) || [];
     return message;
   }
 };
@@ -3007,6 +3134,29 @@ var Metadata_SubwordFrequenciesEntry = {
     return message;
   }
 };
+function bytesFromBase64(b64) {
+  if (globalThis.Buffer) {
+    return Uint8Array.from(globalThis.Buffer.from(b64, "base64"));
+  } else {
+    const bin = globalThis.atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0;i < bin.length; ++i) {
+      arr[i] = bin.charCodeAt(i);
+    }
+    return arr;
+  }
+}
+function base64FromBytes(arr) {
+  if (globalThis.Buffer) {
+    return globalThis.Buffer.from(arr).toString("base64");
+  } else {
+    const bin = [];
+    arr.forEach((byte) => {
+      bin.push(globalThis.String.fromCharCode(byte));
+    });
+    return globalThis.btoa(bin.join(""));
+  }
+}
 function longToNumber(int64) {
   const num = globalThis.Number(int64.toString());
   if (num > globalThis.Number.MAX_SAFE_INTEGER) {
@@ -3086,9 +3236,24 @@ class Pointer {
   }
 }
 
+// dict/varint.ts
+function writeVarint(data, n) {
+  n = BigInt(n);
+  while (n >= 0x80n) {
+    data.push(Number(n & 0x7fn | 0x80n));
+    n >>= 7n;
+  }
+  data.push(Number(n));
+}
+function toVarint(n) {
+  const data = [];
+  writeVarint(data, n);
+  return new Uint8Array(data);
+}
+
 // dict/word_list.ts
 var METADATA_FIELD_NUMBER = 1n;
-var INSTRUCTIONS_FIELD_NUMBER = 2n;
+var DATA_FIELD_NUMBER = 2n;
 
 class InvalidLexiconError extends Error {
   constructor(message) {
@@ -3097,25 +3262,44 @@ class InvalidLexiconError extends Error {
   }
 }
 
-class WordListEntry extends String {
+class WordListSubword {
+  macros;
   elements;
   constructor(macros, elements) {
-    super(elements.map((elt) => macros[Number(elt[elt.length - 1])].subword).join(""));
+    this.macros = macros;
     this.elements = elements;
   }
+  get metadata() {
+    return this.elements.slice(0, -1).map((n) => this.macros[Number(n)]?.inlineMetadata ?? InlineMetadata.create({ bigint: toVarint(n) }));
+  }
+  toString() {
+    return this.macros[Number(this.elements[this.elements.length - 1])].subword;
+  }
 }
-function* toBigInts(numbers) {
-  for (const n of numbers)
-    yield BigInt(n);
+
+class WordListEntry extends String {
+  macros;
+  elements;
+  constructor(macros, elementsArg, elements = elementsArg.slice()) {
+    super(elementsArg.slice(0, -1).map((elt) => macros[Number(elt[elt.length - 1])].subword).join(""));
+    this.macros = macros;
+    this.elements = elements;
+  }
+  get metadata() {
+    return this.elements[this.elements.length - 1].map((n) => this.macros[Number(n)]?.inlineMetadata ?? InlineMetadata.create({ bigint: toVarint(n) }));
+  }
+  get subwords() {
+    return this.elements.slice(0, -1).map((elt) => new WordListSubword(this.macros, elt));
+  }
 }
 
 class WordList {
   _metadata;
-  instructions;
+  data;
   constructor(lexiconMessage) {
     const lexiconMessageArray = new Uint8Array(lexiconMessage);
     const pointer = new Pointer(lexiconMessageArray);
-    let insns = null;
+    let data = null;
     let metadata = null;
     while (!pointer.atEnd) {
       const tag = pointer.varintBigInt();
@@ -3131,19 +3315,21 @@ class WordList {
         const len = pointer.varintBigInt();
         if (fieldNumber === METADATA_FIELD_NUMBER) {
           metadata = Metadata.decode(pointer.view(len));
-        } else if (fieldNumber === INSTRUCTIONS_FIELD_NUMBER) {
-          insns = pointer.view(len);
+        } else if (fieldNumber === DATA_FIELD_NUMBER) {
+          data = pointer.view(len);
+        } else {
+          pointer.skip(len);
         }
       } else {
         throw new InvalidLexiconError(`Unsupported wireType ${wireType}.`);
       }
     }
-    if (!insns)
-      throw new InvalidLexiconError("No `instructions` field.");
+    if (!data)
+      throw new InvalidLexiconError("No `data` field.");
     if (!metadata)
       throw new InvalidLexiconError("No `metadata` field.");
     this._metadata = metadata;
-    this.instructions = insns;
+    this.data = data;
     this._checkForRecursion();
   }
   get metadata() {
@@ -3165,7 +3351,9 @@ class WordList {
     visiting.add(macroIndex);
     const macro = this.macros[macroIndex];
     if (macro?.subroutine) {
-      for (const subMacroIndex of macro.subroutine.instructions) {
+      const ip = new Pointer(macro.subroutine.data);
+      while (!ip.atEnd) {
+        const subMacroIndex = Number(ip.varintBigInt());
         if (visiting.has(subMacroIndex)) {
           throw new InvalidLexiconError("Recursive subroutine detected.");
         }
@@ -3192,15 +3380,15 @@ class WordList {
       const macro = this.macros[Number(instruction)];
       if (macro) {
         if (macro.subroutine) {
-          stack.push(toBigInts(macro.subroutine.instructions));
+          stack.push(this.readInstructions(new Pointer(macro.subroutine.data)));
           continue;
         }
-        if (macro.clear || macro.backup !== undefined) {
-          yield new WordListEntry(this.macros, wordBuffer.slice(0, -1));
+        if (macro.clear || macro.pop !== undefined) {
+          yield new WordListEntry(this.macros, wordBuffer);
           if (macro.clear) {
             wordBuffer.length = 0;
           } else {
-            wordBuffer.length -= macro.backup + 1;
+            wordBuffer.length -= macro.pop + 1;
           }
         } else if (macro.subword === undefined) {
           continue;
@@ -3209,7 +3397,7 @@ class WordList {
       }
     }
     if (wordBuffer[0].length) {
-      yield new WordListEntry(this.macros, wordBuffer.slice(0, -1));
+      yield new WordListEntry(this.macros, wordBuffer);
     }
   }
   *readInstructions(ip) {
@@ -3218,18 +3406,21 @@ class WordList {
     }
   }
   [Symbol.iterator]() {
-    return this.scanFrom(new Pointer(this.instructions));
+    return this.scanFrom(new Pointer(this.data));
   }
   has(possibleWord) {
+    return Boolean(this.get(possibleWord));
+  }
+  get(possibleWord) {
     let iterator = this[Symbol.iterator]();
     const blockSize = this._metadata.clearInterval;
     if (blockSize > 0) {
-      let loBlock = 0, hiBlock = Math.ceil(this.instructions.length / blockSize);
+      let loBlock = 0, hiBlock = Math.ceil(this.data.length / blockSize);
       while (true) {
         const midBlock = Math.floor((loBlock + hiBlock) / 2);
         if (midBlock === loBlock)
           break;
-        const probe = new Pointer(this.instructions, midBlock * blockSize);
+        const probe = new Pointer(this.data, midBlock * blockSize);
         probe.skipToVarint();
         while (!probe.atEnd) {
           if (this.macros[Number(probe.varintBigInt())]?.clear)
@@ -3241,7 +3432,7 @@ class WordList {
         const midWord = midIterator.next().value;
         switch (codePointCompare(possibleWord, midWord)) {
           case 0:
-            return true;
+            return midWord;
           case -1:
             hiBlock = midBlock;
             continue;
@@ -3255,14 +3446,14 @@ class WordList {
     for (const word of iterator) {
       switch (codePointCompare(possibleWord, word)) {
         case 0:
-          return true;
+          return word;
         case 1:
           continue;
         case -1:
-          return false;
+          return;
       }
     }
-    return false;
+    return;
   }
 }
 
@@ -3387,6 +3578,7 @@ class ListDictionary extends Dictionary {
   dictionaryId;
   wordListPromise = null;
   wordList = null;
+  eventTarget = new EventTarget;
   constructor(settings) {
     super();
     this.settings = settings;
@@ -3395,6 +3587,12 @@ class ListDictionary extends Dictionary {
       throw new TypeError(`Word list requires a string URL, not ${dictionarySettings}.`);
     }
     this.dictionaryId = dictionarySettings;
+  }
+  addEventListener(...args) {
+    this.eventTarget.addEventListener(...args);
+  }
+  dispatchEvent(...args) {
+    return this.eventTarget.dispatchEvent(...args);
   }
   getWordList() {
     if (!this.wordListPromise) {
@@ -3409,12 +3607,17 @@ class ListDictionary extends Dictionary {
         dictionaryUrl = new URL(relativeUrl, new URL("dict/", this.settings.baseUrl)).href;
       }
       this.wordListPromise = (async () => {
-        const response = await fetch(dictionaryUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch word list from ${dictionaryUrl}: ${response.statusText}`);
+        this.dispatchEvent(new CustomEvent("loadingstarted"));
+        try {
+          const response = await fetch(dictionaryUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch word list from ${dictionaryUrl}: ${response.statusText}`);
+          }
+          const buffer = await response.arrayBuffer();
+          return new WordList(new Uint8Array(buffer));
+        } finally {
+          this.dispatchEvent(new CustomEvent("loadingended"));
         }
-        const buffer = await response.arrayBuffer();
-        return new WordList(new Uint8Array(buffer));
       })();
     }
     return this.wordListPromise;
@@ -3454,14 +3657,16 @@ class SharedState {
   board;
   tilesState;
   nextTurnNumber;
+  history;
   dictionary;
   gameParams;
-  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), dictionary = makeDictionary(settings), gameParams = gameParamsFromSettings(settings)) {
+  constructor(settings, gameId = settings.gameId ?? makeGameId(), board = new Board(...settings.boardLayout), tilesState = makeTilesState(settings), nextTurnNumber2 = toTurnNumber(1), history = [], dictionary = makeDictionary(settings), gameParams = gameParamsFromSettings(settings)) {
     this.settings = settings;
     this.gameId = gameId;
     this.board = board;
     this.tilesState = tilesState;
     this.nextTurnNumber = nextTurnNumber2;
+    this.history = history;
     this.dictionary = dictionary;
     this.gameParams = gameParams;
     this.settings.players.forEach((player, index) => {
@@ -3475,6 +3680,7 @@ class SharedState {
     this.board.copyFrom(other.board);
     this.tilesState.copyFrom(other.tilesState);
     this.nextTurnNumber = other.nextTurnNumber;
+    this.history.splice(0, this.history.length, ...other.history);
     this.players.forEach((player, index) => {
       player.name = other.players[index].name;
     });
@@ -3488,8 +3694,17 @@ class SharedState {
   getPlayerForTurnNumber(turnNumber) {
     return getPlayerForTurnNumber(this.players, turnNumber);
   }
-  getTurnUrlParams(turnHistory) {
-    const entries = [["gid", fromGameId(this.gameId)]];
+  get lastTurnNumber() {
+    return toTurnNumber(fromTurnNumber(this.nextTurnNumber) - 1);
+  }
+  get turnUrlParams() {
+    return this.getTurnUrlParams(this.history.slice(1 - this.players.length));
+  }
+  getHistoryUrlParamsForPlayer(playerId) {
+    return this.getTurnUrlParams(this.history, ["pid", playerId]);
+  }
+  getTurnUrlParams(turnHistory, ...extraParams) {
+    const entries = [["gid", fromGameId(this.gameId)], ...extraParams];
     const firstHistoryTurnNumber = turnHistory[0]?.turnNumber;
     if (firstHistoryTurnNumber === undefined || firstHistoryTurnNumber === toTurnNumber(1)) {
       entries.push(...this.gameParams);
@@ -3543,7 +3758,8 @@ class SharedState {
         boardChanges.push({
           playerId,
           score: score + bingoBonus,
-          placements: turn.move.playTiles
+          placements: turn.move.playTiles,
+          turnNumber
         });
         turn.mainWord = mainWordForUrl;
         turn.row = row;
@@ -3574,8 +3790,8 @@ class SharedState {
     if (turnsToPlayNow.length === 0)
       return turnsToPlayNow;
     console.debug(`Turn validation success.`);
-    for (const { playerId, score, placements } of boardChanges) {
-      this.board.placeTiles(...placements);
+    for (const { playerId, score, placements, turnNumber: turnNumber2 } of boardChanges) {
+      this.board.placeTiles(placements, turnNumber2);
       this.board.scores.set(playerId, (this.board.scores.get(playerId) ?? 0) + score);
     }
     this.nextTurnNumber = turnNumber;
@@ -3737,7 +3953,8 @@ class SharedState {
       nextTurnNumber: this.nextTurnNumber,
       settings: this.settings.toJSON(),
       board: this.board.toJSON(),
-      tilesState: this.tilesState.toJSON()
+      tilesState: this.tilesState.toJSON(),
+      history: this.history.map((td) => td.paramsStr).join("&")
     };
   }
   static fromJSON(json) {
@@ -3746,14 +3963,39 @@ class SharedState {
     }
     if (typeof json !== "object")
       fail("Not an object");
-    if (!arraysEqual([...Object.keys(json)], ["gameId", "nextTurnNumber", "settings", "board", "tilesState"]))
+    if (!arraysEqual([...Object.keys(json)], ["gameId", "nextTurnNumber", "settings", "board", "tilesState", "history"]))
       fail("Wrong keys or key order");
     if (typeof json.gameId !== "string")
       fail("Game ID is not a string");
     if (typeof json.nextTurnNumber !== "number")
       fail("Next turn number is not a number");
+    if (typeof json.history !== "string")
+      fail("History is not a string");
     const settings = Settings.fromJSON(json.settings);
-    return new SharedState(settings, json.gameId, Board.fromJSON(json.board), rehydrateTilesState(settings.tileSystemType, json.tilesState), toTurnNumber(json.nextTurnNumber));
+    const sharedState = new SharedState(settings, json.gameId, Board.fromJSON(json.board), rehydrateTilesState(settings.tileSystemType, json.tilesState), toTurnNumber(json.nextTurnNumber));
+    const params = new URLSearchParams(json.history);
+    const paramsIterator = params[Symbol.iterator]();
+    const turns = [];
+    for (const turn of sharedState.turnsFromParams(paramsIterator, toTurnNumber(1))) {
+      if ("playTiles" in turn.move) {
+        ({
+          mainWordForUrl: turn.mainWord,
+          row: turn.row,
+          col: turn.col,
+          vertical: turn.vertical,
+          blanks: turn.blanks
+        } = sharedState.board.checkWordPlacement(...turn.move.playTiles));
+        sharedState.board.placeTiles(turn.move.playTiles, turn.turnNumber);
+      }
+      turns.push(turn);
+    }
+    updateTurnHistory({
+      history: sharedState.history,
+      nextTurnNumber: sharedState.nextTurnNumber,
+      finalTurnNumber: null,
+      turns
+    });
+    return sharedState;
   }
 }
 function makeTilesState(settings) {
@@ -3778,19 +4020,15 @@ function isTurnPreviewSuccess(result) {
 
 class GameState extends EventTarget {
   playerId;
-  keepAllHistory;
   tilesHeld;
-  history;
   pendingExtraParams;
   shared;
   inPlayTurns = false;
   storage = null;
-  constructor(playerId, settings, keepAllHistory = true, shared, tilesHeld = [], history = [], pendingExtraParams = new URLSearchParams) {
+  constructor(playerId, settings, shared, tilesHeld = [], pendingExtraParams = new URLSearchParams) {
     super();
     this.playerId = playerId;
-    this.keepAllHistory = keepAllHistory;
     this.tilesHeld = tilesHeld;
-    this.history = history;
     this.pendingExtraParams = pendingExtraParams;
     if (!shared) {
       if (!settings) {
@@ -3815,9 +4053,7 @@ class GameState extends EventTarget {
   }
   copyFrom(other) {
     this.shared.copyFrom(other.shared);
-    this.keepAllHistory = other.keepAllHistory;
     this.tilesHeld.splice(0, this.tilesHeld.length, ...other.tilesHeld);
-    this.history.splice(0, this.history.length, ...other.history);
     this.pendingExtraParams = other.pendingExtraParams;
   }
   save() {
@@ -3853,6 +4089,9 @@ class GameState extends EventTarget {
   get nextTurnNumber() {
     return this.shared.nextTurnNumber;
   }
+  get lastTurnNumber() {
+    return this.shared.lastTurnNumber;
+  }
   get players() {
     return this.shared.players;
   }
@@ -3875,13 +4114,10 @@ class GameState extends EventTarget {
     return await this.tilesState.getTiles(playerId);
   }
   get turnUrlParams() {
-    return this.shared.getTurnUrlParams(this.history.slice(1 - this.players.length));
+    return this.shared.turnUrlParams;
   }
   getHistoryUrlParamsForPlayer(playerId) {
-    return new URLSearchParams([
-      ["pid", playerId],
-      ...this.shared.getTurnUrlParams(this.history)
-    ]);
+    return this.shared.getHistoryUrlParamsForPlayer(playerId);
   }
   get playerWhoseTurnItIs() {
     if (this.isGameOver)
@@ -4117,7 +4353,7 @@ class GameState extends EventTarget {
       }
     }
     updateTurnHistory({
-      history: this.history,
+      history: this.shared.history,
       nextTurnNumber: this.nextTurnNumber,
       finalTurnNumber,
       turns: newTurns
@@ -4137,12 +4373,6 @@ class GameState extends EventTarget {
       }
       console.log(`Transfering ${allTilesSum} to Player ${finalTurnPlayerId}.`);
       this.board.scores.set(finalTurnPlayerId, (this.board.scores.get(finalTurnPlayerId) ?? 0) + allTilesSum);
-    }
-    if (!this.keepAllHistory) {
-      const turnsToKeep = this.players.length - 1;
-      if (turnsToKeep > 0 && this.history.length > turnsToKeep) {
-        this.history.splice(0, this.history.length - turnsToKeep);
-      }
     }
   }
   changePlayerName(playerId, name) {
@@ -4205,7 +4435,6 @@ class GameState extends EventTarget {
     return {
       shared: this.shared.toJSON(),
       playerId: this.playerId,
-      keepAllHistory: this.keepAllHistory,
       tilesHeld: this.tilesHeld.map((placement) => {
         const json = {
           tile: placement.tile.toJSON(),
@@ -4216,9 +4445,6 @@ class GameState extends EventTarget {
           json.assignedLetter = placement.assignedLetter;
         return json;
       }),
-      history: this.history.map((turnData) => {
-        return { turnNumber: turnData.turnNumber, params: turnData.paramsStr };
-      }),
       pendingExtraParams: this.pendingExtraParams.toString()
     };
   }
@@ -4228,24 +4454,27 @@ class GameState extends EventTarget {
     }
     if (typeof json !== "object")
       fail("Not an object");
+    function upgradeOldFormat() {
+      delete json.keepAllHistory;
+      if (json.history && json.shared) {
+        const history = json.history.map((td) => td.paramsStr).join("&");
+        json.shared.history = history;
+        delete json.history;
+      }
+    }
+    upgradeOldFormat();
     if (!arraysEqual([...Object.keys(json)], [
       "shared",
       "playerId",
-      "keepAllHistory",
       "tilesHeld",
-      "history",
       "pendingExtraParams"
     ])) {
       fail("Wrong keys or key order");
     }
     if (typeof json.playerId !== "string")
       fail("Player ID is not a string");
-    if (typeof json.keepAllHistory !== "boolean")
-      fail("keepAllHistory is not a boolean");
     if (!Array.isArray(json.tilesHeld))
       fail("tilesHeld is not an array");
-    if (!Array.isArray(json.history))
-      fail("History is not an array");
     if (typeof json.pendingExtraParams !== "string")
       fail("pendingExtraParams is not a string");
     const tilesHeld = json.tilesHeld.map((tileJson) => {
@@ -4274,20 +4503,7 @@ class GameState extends EventTarget {
         result.assignedLetter = tileJson.assignedLetter;
       return result;
     });
-    const history = json.history.map((turnDataJson) => {
-      if (!arraysEqual([...Object.keys(turnDataJson)], ["turnNumber", "params"])) {
-        fail("Wrong history element keys or key order");
-      }
-      if (typeof turnDataJson.turnNumber !== "number")
-        fail("turnNumber is not a number");
-      if (typeof turnDataJson.params !== "string")
-        fail("params is not a string");
-      return {
-        turnNumber: toTurnNumber(turnDataJson.turnNumber),
-        paramsStr: turnDataJson.params
-      };
-    });
-    const gameState = new GameState(json.playerId, undefined, json.keepAllHistory, SharedState.fromJSON(json.shared), tilesHeld, history, new URLSearchParams(json.pendingExtraParams));
+    const gameState = new GameState(json.playerId, undefined, SharedState.fromJSON(json.shared), tilesHeld, new URLSearchParams(json.pendingExtraParams));
     return gameState;
   }
 }
@@ -4441,7 +4657,7 @@ class GameSetup {
         this._updatePlayerList(currentPlayers);
       };
       playerEntry.appendChild(removeButton);
-      if (this.gameState.keepAllHistory && player.id !== undefined) {
+      if (player.id !== undefined) {
         const historyParams = this.gameState.getHistoryUrlParamsForPlayer(player.id);
         const replayLink = this.doc.createElement("a");
         replayLink.className = "replay-link";
@@ -4568,6 +4784,7 @@ class View {
   dropTargetMap = new Map;
   doc;
   window;
+  throbber;
   browser;
   constructor(gameState, browser) {
     this.gameState = gameState;
@@ -4575,6 +4792,10 @@ class View {
     this.doc = browser.getDocument();
     this.browser = browser;
     this.gameContainer = this.doc.getElementById("game-container");
+    this.throbber = this.doc.createElement("div");
+    this.throbber.className = "throbber";
+    this.throbber.style.display = "none";
+    this.gameContainer.appendChild(this.throbber);
     this.boardContainer = this.gameContainer.querySelector("#board-container");
     this.boardTransformer = this.doc.createElement("div");
     this.boardTransformer.id = "board-transformer";
@@ -4621,6 +4842,9 @@ class View {
     const square = this.gameState.board.squares[row][col];
     if (square.tile) {
       this.addTileToElement(squareDiv, square.tile, square.assignedLetter);
+      if (square.turnNumber === this.gameState.lastTurnNumber) {
+        squareDiv.classList.add("latest");
+      }
     } else {
       const placedTile = this.gameState.tilesHeld.find((p) => p.row === row && p.col === col);
       if (placedTile) {
@@ -4963,6 +5187,14 @@ class View {
     this.doc.addEventListener("pointerdown", pointerdown);
     this.boardContainer.addEventListener("pointerdown", pointerdown);
     this.doc.addEventListener("keydown", keydown);
+  }
+  showThrobber(show, message) {
+    if (show) {
+      this.throbber.textContent = message;
+      this.throbber.style.display = "block";
+    } else {
+      this.throbber.style.display = "none";
+    }
   }
 }
 
@@ -5452,6 +5684,7 @@ class Controller {
           await this.browser.writeToClipboard(url.toString());
         }
       } catch (e) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
         alert(e instanceof PlayRejectedError ? e.message : e);
       }
     } else {
@@ -5640,6 +5873,14 @@ class App {
       this.view.renderScores();
       this.view.renderBagTileCount();
       this.view.renderActionButtons();
+      if (this.gameState.shared.dictionary instanceof ListDictionary) {
+        this.gameState.shared.dictionary.addEventListener("loadingstarted", () => {
+          this.view.showThrobber(true, t("ui.throbber.downloading_dictionary"));
+        });
+        this.gameState.shared.dictionary.addEventListener("loadingended", () => {
+          this.view.showThrobber(false, "");
+        });
+      }
       this.gameState.addEventListener("tilemove", (evt) => {
         if (evt.detail.fromRow !== undefined && evt.detail.fromCol !== undefined) {
           this.view.renderTileSpot(evt.detail.fromRow, evt.detail.fromCol);
